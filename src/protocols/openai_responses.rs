@@ -59,7 +59,7 @@ fn encode_input(messages: &[Message]) -> Result<Value, Error> {
         // Item order mirrors part order: a standalone item (tool call,
         // tool result, reasoning) flushes the accumulated message first.
         let mut content: Vec<Value> = Vec::new();
-        let mut flush = |content: &mut Vec<Value>, out: &mut Vec<Value>| {
+        let flush = |content: &mut Vec<Value>, out: &mut Vec<Value>| {
             if !content.is_empty() {
                 out.push(json!({
                     "type": "message",

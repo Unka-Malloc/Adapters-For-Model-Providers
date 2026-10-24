@@ -388,6 +388,38 @@ pub fn http_error(status: u16, body: &[u8]) -> Error {
     }
 }
 
+/// Decode a `GET /models` listing into canonical `ModelInfo` entries.
+/// Unknown per-model fields ride `extensions` verbatim.
+pub fn decode_models(body: &[u8]) -> Result<Vec<ModelInfo>, Error> {
+    let v: Value = serde_json::from_slice(body)
+        .map_err(|e| Error::Protocol(format!("models response is not JSON: {e}")))?;
+    let data = v
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::Protocol("models response missing data[]".into()))?;
+    data.iter()
+        .map(|m| {
+            let id = m
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| Error::Protocol("model entry missing id".into()))?
+                .to_owned();
+            let owned_by = m
+                .get("owned_by")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let mut extensions = m.as_object().cloned().unwrap_or_default();
+            extensions.remove("id");
+            extensions.remove("owned_by");
+            Ok(ModelInfo {
+                id,
+                owned_by,
+                extensions,
+            })
+        })
+        .collect()
+}
+
 /// Stateful decoder: Chat Completions SSE chunks → canonical events.
 ///
 /// Part indices are assigned lazily in arrival order; OpenAI's tool-call

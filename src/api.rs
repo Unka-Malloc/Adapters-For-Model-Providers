@@ -115,6 +115,17 @@ pub struct ModelRef {
     pub model: String,
 }
 
+/// A model reported by live endpoint discovery. Reported presence is an
+/// observed claim for that account/endpoint — never a verified-capability
+/// or entitlement statement.
+#[derive(Clone, Debug, Default)]
+pub struct ModelInfo {
+    pub id: String,
+    pub owned_by: Option<String>,
+    /// Provider-native model fields not represented above.
+    pub extensions: Extensions,
+}
+
 // ---------------------------------------------------------------------------
 // Operations
 // ---------------------------------------------------------------------------
@@ -741,6 +752,13 @@ pub trait Adapter: Send + Sync {
             "{} does not implement {op}",
             self.target().provider
         ))
+    }
+
+    /// Live model discovery against the bound endpoint. A missing or
+    /// failed listing means "unknown", never "no models exist"; an
+    /// adapter without a discovery surface reports `Unsupported`.
+    async fn models(&self, _ctrl: &RequestControl) -> Result<Vec<ModelInfo>, Error> {
+        Err(self.unsupported("models"))
     }
 
     async fn chat(&self, _req: ChatRequest, _ctrl: &RequestControl) -> Result<Output, Error> {

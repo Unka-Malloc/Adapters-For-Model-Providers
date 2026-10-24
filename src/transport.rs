@@ -6,6 +6,11 @@
 mod sse;
 pub use sse::*;
 
+#[cfg(feature = "reqwest-transport")]
+mod reqwest_transport;
+#[cfg(feature = "reqwest-transport")]
+pub use reqwest_transport::ReqwestTransport;
+
 use crate::api::{DynStream, RequestControl, RetrySafety};
 
 /// An HTTP request issued through the transport port.

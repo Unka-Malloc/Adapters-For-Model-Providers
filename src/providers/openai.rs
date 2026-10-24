@@ -157,6 +157,17 @@ impl Adapter for OpenAiAdapter {
         &self.target
     }
 
+    /// `GET /models` — the OpenAI-compatible discovery surface.
+    async fn models(&self, ctrl: &RequestControl) -> Result<Vec<ModelInfo>, Error> {
+        let headers = self.authenticate().await?;
+        let mut http = HttpRequest::get(self.target.endpoint("models"));
+        for (k, v) in headers.iter() {
+            http.headers.append(k, v.clone());
+        }
+        let body = self.send_json(http, ctrl).await?;
+        openai_chat::decode_models(&body)
+    }
+
     async fn chat(&self, mut req: ChatRequest, ctrl: &RequestControl) -> Result<Output, Error> {
         self.resolve_media(&mut req, ctrl).await?;
         let headers = self.authenticate().await?;

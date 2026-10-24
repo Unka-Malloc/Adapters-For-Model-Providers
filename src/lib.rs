@@ -8,6 +8,7 @@
 
 pub mod api;
 pub mod auth;
+pub mod catalog;
 pub mod effects;
 pub mod protocols;
 pub mod providers;
@@ -15,6 +16,7 @@ pub mod transport;
 
 pub use api::*;
 pub use auth::*;
+pub use catalog::{AuthSpec, Catalog, Client, ProviderProfile, ServiceDef};
 pub use effects::*;
 pub use providers::*;
 pub use transport::*;
