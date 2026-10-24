@@ -21,4 +21,5 @@ tokio-util = "0.7"
 url = "2"
 
 [dev-dependencies]
+futures-util = "0.3"
 tokio = { version = "1", features = ["macros", "rt"] }

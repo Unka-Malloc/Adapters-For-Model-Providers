@@ -95,6 +95,16 @@ impl ServiceTarget {
             headers: http::HeaderMap::new(),
         }
     }
+
+    /// Join an API path onto the base URL, normalizing the trailing slash
+    /// so `v1` + `chat/completions` yields `v1/chat/completions`.
+    pub fn endpoint(&self, path: &str) -> url::Url {
+        let mut base = self.base_url.clone();
+        if !base.path().ends_with('/') {
+            base.set_path(&format!("{}/", base.path()));
+        }
+        base.join(path).unwrap_or_else(|_| self.base_url.clone())
+    }
 }
 
 /// A model addressed through a service target. `model` is the upstream
@@ -161,6 +171,17 @@ pub enum MediaSource {
     Resource(String),
 }
 
+/// The kind of media a part carries — required to pick the correct
+/// native encoding (image vs audio vs file differ on the wire).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MediaKind {
+    Image,
+    Audio,
+    Video,
+    File,
+}
+
 /// One ordered content part inside a message or output.
 ///
 /// Order is preserved across protocols that support ordered blocks.
@@ -171,6 +192,7 @@ pub enum ContentPart {
         text: String,
     },
     Media {
+        kind: MediaKind,
         source: MediaSource,
         /// Optional provider detail (e.g. image detail level).
         detail: Option<String>,
@@ -465,8 +487,13 @@ pub enum StreamEvent {
     PartStarted { index: u32, kind: PartKind },
     /// Text appended to an open part.
     TextDelta { index: u32, text: String },
+    /// A tool call begins; carries the full call identity up front.
+    /// Partial arguments follow as `ToolCallDelta`.
+    ToolCallStarted { index: u32, id: String, name: String },
     /// Partial tool-call arguments appended to an open part.
     ToolCallDelta { index: u32, arguments: String },
+    /// Reasoning/thinking text appended to an open reasoning part.
+    ReasoningDelta { index: u32, text: String },
     /// Media bytes appended to an open part.
     MediaDelta { index: u32, data: bytes::Bytes, media_type: Option<String> },
     /// An open part is complete.
@@ -720,11 +747,13 @@ pub trait Adapter: Send + Sync {
         Err(self.unsupported("chat"))
     }
 
-    async fn chat_stream<'a>(
+    /// The returned stream owns its data; it does not borrow `ctrl`,
+    /// so it may outlive the call and move across tasks.
+    async fn chat_stream(
         &self,
         _req: ChatRequest,
-        _ctrl: &'a RequestControl,
-    ) -> Result<DynStream<'a, StreamEvent>, Error> {
+        _ctrl: &RequestControl,
+    ) -> Result<DynStream<'static, StreamEvent>, Error> {
         Err(self.unsupported("chat_stream"))
     }
 

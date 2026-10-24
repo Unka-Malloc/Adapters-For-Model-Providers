@@ -3,6 +3,9 @@
 //! owns pools, DNS, TLS policy and proxies. Body streams are pull-based,
 //! so backpressure is structural, not a separate buffer.
 
+mod sse;
+pub use sse::*;
+
 use crate::api::{DynStream, RequestControl, RetrySafety};
 
 /// An HTTP request issued through the transport port.

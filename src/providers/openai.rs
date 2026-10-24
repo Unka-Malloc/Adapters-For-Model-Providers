@@ -1,0 +1,230 @@
+//! The OpenAI-protocol adapter: binds a `ServiceTarget` speaking Chat
+//! Completions or Responses to a transport and credential port.
+//!
+//! Every OpenAI-compatible endpoint (OpenAI itself, DeepSeek, Moonshot,
+//! xAI, routers, local servers) uses this adapter; per-endpoint
+//! differences arrive through `ServiceTarget` and request `extensions`.
+
+use std::sync::Arc;
+
+use serde_json::json;
+
+use crate::api::*;
+use crate::auth::{AuthKind, Credential, CredentialResolver, CredentialScope};
+use crate::effects::{EffectHost, ResourceRef};
+use crate::protocols::{openai_chat, openai_responses};
+use crate::transport::{EventStream, HttpRequest, Transport};
+
+/// Adapter for the OpenAI protocol family (Chat Completions + Responses).
+pub struct OpenAiAdapter {
+    target: ServiceTarget,
+    auth: AuthKind,
+    transport: Arc<dyn Transport>,
+    resolver: Arc<dyn CredentialResolver>,
+    effects: Option<Arc<dyn EffectHost>>,
+}
+
+impl OpenAiAdapter {
+    pub fn new(
+        target: ServiceTarget,
+        auth: AuthKind,
+        transport: Arc<dyn Transport>,
+        resolver: Arc<dyn CredentialResolver>,
+    ) -> Result<Self, Error> {
+        match target.protocol {
+            Protocol::OpenAiChatCompletions | Protocol::OpenAiResponses => {}
+            ref other => {
+                return Err(Error::Unsupported(format!(
+                    "OpenAiAdapter cannot serve protocol {other:?}"
+                )));
+            }
+        }
+        Ok(Self {
+            target,
+            auth,
+            transport,
+            resolver,
+            effects: None,
+        })
+    }
+
+    /// Attach the host effect port used to resolve media resources.
+    pub fn with_effects(mut self, effects: Arc<dyn EffectHost>) -> Self {
+        self.effects = Some(effects);
+        self
+    }
+
+    async fn authenticate(&self) -> Result<http::HeaderMap, Error> {
+        let scope = CredentialScope {
+            target: &self.target,
+            auth: &self.auth,
+        };
+        let credential = self.resolver.resolve(scope).await?;
+        let mut headers = self.target.headers.clone();
+        match credential {
+            Credential::None => {}
+            Credential::ApiKey(secret) | Credential::Bearer { token: secret, .. } => {
+                headers.insert(
+                    http::header::AUTHORIZATION,
+                    http::HeaderValue::from_str(&format!("Bearer {}", secret.expose()))
+                        .map_err(|_| Error::Credential("credential is not a valid header value".into()))?,
+                );
+            }
+            Credential::Cloud { .. } => {
+                return Err(Error::Unsupported(
+                    "cloud identity is not yet implemented for this adapter".into(),
+                ));
+            }
+        }
+        Ok(headers)
+    }
+
+    /// Resolve `MediaSource::Resource` parts into inline data through the
+    /// host effect port before the request enters the codec.
+    async fn resolve_media(&self, req: &mut ChatRequest, ctrl: &RequestControl) -> Result<(), Error> {
+        let needs_resolve = req.messages.iter().any(|m| {
+            m.content.iter().any(|p| {
+                matches!(
+                    p,
+                    ContentPart::Media {
+                        source: MediaSource::Resource(_),
+                        ..
+                    }
+                )
+            })
+        });
+        if !needs_resolve {
+            return Ok(());
+        }
+        let effects = self
+            .effects
+            .as_ref()
+            .ok_or_else(|| Error::Unsupported("media resources need a host effect port".into()))?;
+        for m in &mut req.messages {
+            for part in &mut m.content {
+                if let ContentPart::Media { kind: _, source, .. } = part {
+                    if let MediaSource::Resource(id) = source {
+                        let rr = ResourceRef {
+                            id: id.clone(),
+                            media_type: None,
+                        };
+                        let data = effects.read_resource(&rr, ctrl).await?;
+                        *source = MediaSource::Inline {
+                            media_type: "application/octet-stream".into(),
+                            data,
+                        };
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn send_json(&self, req: HttpRequest, ctrl: &RequestControl) -> Result<Vec<u8>, Error> {
+        let res = self.transport.send(req, ctrl).await?;
+        if !res.status.is_success() {
+            return Err(openai_chat::http_error(res.status.as_u16(), &res.body));
+        }
+        Ok(res.body.to_vec())
+    }
+
+    async fn open_stream(
+        &self,
+        req: HttpRequest,
+        ctrl: &RequestControl,
+    ) -> Result<crate::transport::StreamingResponse, Error> {
+        let res = self.transport.send_stream(req, ctrl).await?;
+        if !res.status.is_success() {
+            // Drain the error body before building the error.
+            let mut body = Vec::new();
+            let mut stream = res.body;
+            while let Some(chunk) = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await
+            {
+                match chunk {
+                    Ok(b) => body.extend_from_slice(&b),
+                    Err(e) => return Err(e),
+                }
+            }
+            return Err(openai_chat::http_error(res.status.as_u16(), &body));
+        }
+        Ok(res)
+    }
+}
+
+#[async_trait::async_trait]
+impl Adapter for OpenAiAdapter {
+    fn target(&self) -> &ServiceTarget {
+        &self.target
+    }
+
+    async fn chat(&self, mut req: ChatRequest, ctrl: &RequestControl) -> Result<Output, Error> {
+        self.resolve_media(&mut req, ctrl).await?;
+        let headers = self.authenticate().await?;
+        match self.target.protocol {
+            Protocol::OpenAiChatCompletions => {
+                let body = openai_chat::build_request(&req)?;
+                let mut http = HttpRequest::post_json(self.target.endpoint("chat/completions"), body);
+                for (k, v) in headers.iter() {
+                    http.headers.append(k, v.clone());
+                }
+                let body = self.send_json(http, ctrl).await?;
+                openai_chat::decode_response(&body)
+            }
+            Protocol::OpenAiResponses => {
+                let body = openai_responses::build_request(&req)?;
+                let mut http = HttpRequest::post_json(self.target.endpoint("responses"), body);
+                for (k, v) in headers.iter() {
+                    http.headers.append(k, v.clone());
+                }
+                let body = self.send_json(http, ctrl).await?;
+                openai_responses::decode_response(&body)
+            }
+            ref other => Err(Error::Unsupported(format!(
+                "OpenAiAdapter cannot serve protocol {other:?}"
+            ))),
+        }
+    }
+
+    async fn chat_stream(
+        &self,
+        mut req: ChatRequest,
+        ctrl: &RequestControl,
+    ) -> Result<DynStream<'static, StreamEvent>, Error> {
+        self.resolve_media(&mut req, ctrl).await?;
+        let headers = self.authenticate().await?;
+        match self.target.protocol {
+            Protocol::OpenAiChatCompletions => {
+                let mut body = openai_chat::build_request(&req)?;
+                body["stream"] = json!(true);
+                body.as_object_mut().unwrap().entry("stream_options".to_owned()).or_insert_with(|| {
+                    json!({"include_usage": true})
+                });
+                let mut http = HttpRequest::post_json(self.target.endpoint("chat/completions"), body);
+                for (k, v) in headers.iter() {
+                    http.headers.append(k, v.clone());
+                }
+                let res = self.open_stream(http, ctrl).await?;
+                Ok(Box::pin(EventStream::new(
+                    res.body,
+                    Box::new(openai_chat::ChatStreamDecoder::new()),
+                )))
+            }
+            Protocol::OpenAiResponses => {
+                let mut body = openai_responses::build_request(&req)?;
+                body["stream"] = json!(true);
+                let mut http = HttpRequest::post_json(self.target.endpoint("responses"), body);
+                for (k, v) in headers.iter() {
+                    http.headers.append(k, v.clone());
+                }
+                let res = self.open_stream(http, ctrl).await?;
+                Ok(Box::pin(EventStream::new(
+                    res.body,
+                    Box::new(openai_responses::ResponsesStreamDecoder::new()),
+                )))
+            }
+            ref other => Err(Error::Unsupported(format!(
+                "OpenAiAdapter cannot serve protocol {other:?}"
+            ))),
+        }
+    }
+}
