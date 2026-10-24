@@ -8,6 +8,7 @@
 
 pub mod api;
 pub mod auth;
+pub mod broker;
 pub mod catalog;
 pub mod effects;
 pub mod oauth;
