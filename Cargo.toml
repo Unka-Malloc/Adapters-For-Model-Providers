@@ -1,0 +1,24 @@
+[package]
+name = "a4mp"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "Independently implemented adapters for model providers: one typed SDK plus optional wire codecs"
+repository = "https://github.com/Unka-Malloc/Adapters-For-Model-Providers"
+keywords = ["ai", "llm", "model-provider", "adapter", "sdk"]
+categories = ["api-bindings", "asynchronous", "web-programming"]
+
+[dependencies]
+async-trait = "0.1"
+bytes = "1"
+futures-core = "0.3"
+http = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio-util = "0.7"
+url = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }

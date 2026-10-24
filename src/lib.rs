@@ -1,0 +1,17 @@
+//! A4MP — Adapters For Model Providers.
+//!
+//! Independently implemented, provider-neutral adapters for model-provider
+//! protocols. One typed SDK for ordinary Rust callers, plus optional wire
+//! codecs for gateway-style consumers. Provider identity is open-ended;
+//! all model operation families are first-class; credential custody,
+//! local effects and service lifetime stay with the host.
+
+pub mod api;
+pub mod auth;
+pub mod effects;
+pub mod transport;
+
+pub use api::*;
+pub use auth::*;
+pub use effects::*;
+pub use transport::*;
