@@ -734,7 +734,7 @@ async fn media_resource_resolves_through_effects() {
             "type": "image",
             "source": {
                 "type": "base64",
-                "media_type": "application/octet-stream",
+                "media_type": "image/png",
                 "data": "iVBORw==",
             },
         })
