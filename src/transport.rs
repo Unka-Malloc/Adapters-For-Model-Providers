@@ -11,7 +11,7 @@ mod reqwest_transport;
 #[cfg(feature = "reqwest-transport")]
 pub use reqwest_transport::ReqwestTransport;
 
-use crate::api::{DynStream, RequestControl, RetrySafety};
+use crate::api::{DynStream, Error, RequestControl, RetrySafety};
 
 /// An HTTP request issued through the transport port.
 #[derive(Clone, Debug)]
@@ -98,6 +98,20 @@ impl TransportError {
     }
 }
 
+/// A bidirectional frame channel (WebSocket or equivalent) for realtime
+/// sessions. Pull-based inbound preserves backpressure; `None` from
+/// `recv` means the peer closed.
+#[async_trait::async_trait]
+pub trait DuplexChannel: Send {
+    /// Pull the next inbound frame.
+    async fn recv(&mut self) -> Result<Option<bytes::Bytes>, Error>;
+    /// Send one outbound frame (text or binary per the session's
+    /// negotiation; the adapter picks the wire shape).
+    async fn send(&self, data: bytes::Bytes) -> Result<(), Error>;
+    /// Close normally and release the connection.
+    async fn close(self: Box<Self>) -> Result<(), Error>;
+}
+
 /// The injected transport port. One shared implementation backs every
 /// adapter in a client, giving one connection pool and one place for
 /// host policy (TLS, proxy, DNS, metrics).
@@ -113,4 +127,17 @@ pub trait Transport: Send + Sync {
         req: HttpRequest,
         ctrl: &RequestControl,
     ) -> Result<StreamingResponse, TransportError>;
+
+    /// Bidirectional channel for realtime session protocols.
+    /// Default reports unsupported; realtime-capable transports
+    /// (WebSocket implementations, host-provided channels) override.
+    async fn open_channel(
+        &self,
+        _req: HttpRequest,
+        _ctrl: &RequestControl,
+    ) -> Result<Box<dyn DuplexChannel>, TransportError> {
+        Err(TransportError::Io(
+            "duplex channels not supported by this transport".into(),
+        ))
+    }
 }
