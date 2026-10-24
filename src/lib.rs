@@ -14,6 +14,7 @@ pub mod effects;
 pub mod oauth;
 pub mod protocols;
 pub mod providers;
+pub mod sigv4;
 pub mod transport;
 pub mod wire;
 

@@ -136,6 +136,9 @@ impl Catalog {
         c.register_openai();
         c.register_anthropic();
         c.register_gemini();
+        c.register_bedrock();
+        c.register_cohere();
+        c.register_ollama();
         c
     }
 
@@ -213,6 +216,48 @@ impl Catalog {
             Arc::new(|target, auth, transport, resolver, effects| {
                 let adapter =
                     crate::providers::AnthropicAdapter::new(target, auth, transport, resolver)?;
+                Ok(Arc::new(match effects {
+                    Some(e) => adapter.with_effects(e),
+                    None => adapter,
+                }))
+            }),
+        );
+    }
+
+    fn register_cohere(&mut self) {
+        self.adapters.insert(
+            Protocol::Other("cohere".into()),
+            Arc::new(|target, auth, transport, resolver, effects| {
+                let adapter =
+                    crate::providers::CohereAdapter::new(target, auth, transport, resolver)?;
+                Ok(Arc::new(match effects {
+                    Some(e) => adapter.with_effects(e),
+                    None => adapter,
+                }))
+            }),
+        );
+    }
+
+    fn register_ollama(&mut self) {
+        self.adapters.insert(
+            Protocol::Other("ollama".into()),
+            Arc::new(|target, auth, transport, resolver, effects| {
+                let adapter =
+                    crate::providers::OllamaAdapter::new(target, auth, transport, resolver)?;
+                Ok(Arc::new(match effects {
+                    Some(e) => adapter.with_effects(e),
+                    None => adapter,
+                }))
+            }),
+        );
+    }
+
+    fn register_bedrock(&mut self) {
+        self.adapters.insert(
+            Protocol::BedrockConverse,
+            Arc::new(|target, auth, transport, resolver, effects| {
+                let adapter =
+                    crate::providers::BedrockAdapter::new(target, auth, transport, resolver)?;
                 Ok(Arc::new(match effects {
                     Some(e) => adapter.with_effects(e),
                     None => adapter,

@@ -116,11 +116,11 @@ async fn anthropic_and_gemini_bind_through_profiles() {
 #[tokio::test]
 async fn unregistered_protocol_reports_unsupported() {
     let (client, _) = client();
-    // Bedrock's adapter is not registered yet; binding must fail
+    // A protocol family no adapter claims: binding must fail
     // explicitly, not fall through to another protocol family.
     let target = ServiceTarget::new(
         "bedrock",
-        Protocol::BedrockConverse,
+        Protocol::Other("unregistered-family".into()),
         url::Url::parse("https://bedrock-runtime.us-east-1.amazonaws.com").unwrap(),
     );
     let result = client.bind_target(target, AuthKind::Bearer);

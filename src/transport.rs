@@ -11,6 +11,11 @@ mod reqwest_transport;
 #[cfg(feature = "reqwest-transport")]
 pub use reqwest_transport::ReqwestTransport;
 
+#[cfg(feature = "realtime-ws")]
+mod ws_transport;
+#[cfg(feature = "realtime-ws")]
+pub use ws_transport::WsTransport;
+
 use crate::api::{DynStream, Error, RequestControl, RetrySafety};
 
 /// An HTTP request issued through the transport port.
