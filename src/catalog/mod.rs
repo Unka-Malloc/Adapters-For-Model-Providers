@@ -47,8 +47,42 @@ pub struct ServiceDef {
 
 impl ServiceDef {
     /// Materialize into a `ServiceTarget` for adapter binding.
+    ///
+    /// Per-resource providers (Azure resource names, Cloudflare account
+    /// ids, ...) declare `base_url` templates with `{name}` placeholders;
+    /// those must be materialized with [`Self::target_with`] instead —
+    /// `target` fails rather than returning a URL containing placeholders.
     pub fn target(&self, provider: &ProviderId) -> Result<ServiceTarget, Error> {
-        let url = url::Url::parse(self.base_url).map_err(|e| {
+        self.materialize(provider, self.base_url)
+    }
+
+    /// Materialize a templated endpoint by substituting `{name}`
+    /// placeholders in `base_url` with values from `vars`. Unknown
+    /// placeholder names make materialization fail with a protocol error
+    /// naming the missing variable — never a silently literal URL.
+    pub fn target_with(
+        &self,
+        provider: &ProviderId,
+        vars: &std::collections::BTreeMap<&str, &str>,
+    ) -> Result<ServiceTarget, Error> {
+        let mut resolved = self.base_url.to_owned();
+        for (key, value) in vars {
+            resolved = resolved.replace(&format!("{{{key}}}"), value);
+        }
+        if let Some(start) = resolved.find('{') {
+            if let Some(end) = resolved[start..].find('}') {
+                return Err(Error::Protocol(format!(
+                    "profile {} endpoint requires variable {{{}}}",
+                    provider.as_str(),
+                    &resolved[start + 1..start + end],
+                )));
+            }
+        }
+        self.materialize(provider, &resolved)
+    }
+
+    fn materialize(&self, provider: &ProviderId, base_url: &str) -> Result<ServiceTarget, Error> {
+        let url = url::Url::parse(base_url).map_err(|e| {
             Error::Protocol(format!("profile {} endpoint {e}", provider.as_str()))
         })?;
         let mut target = ServiceTarget::new(provider.clone(), self.protocol.clone(), url);
@@ -99,6 +133,49 @@ impl ProviderProfile {
             .or(candidates.first())
             .copied()?;
         chosen.target(&self.id).ok()
+    }
+
+    /// [`Self::target_for`] with endpoint variables for templated
+    /// per-resource base URLs (`{name}` placeholders).
+    pub fn target_for_with(
+        &self,
+        protocol: &Protocol,
+        region: Option<&str>,
+        vars: &std::collections::BTreeMap<&str, &str>,
+    ) -> Option<ServiceTarget> {
+        let candidates: Vec<&ServiceDef> = self
+            .targets
+            .iter()
+            .filter(|t| region.is_none() || t.region == region)
+            .collect();
+        let chosen = candidates
+            .iter()
+            .find(|t| t.protocol == *protocol)
+            .or(candidates.first())
+            .copied()?;
+        chosen.target_with(&self.id, vars).ok()
+    }
+
+    /// [`Self::target_for`] with endpoint variables, surfacing a missing
+    /// placeholder variable as the error instead of `None`.
+    pub fn try_target_for(
+        &self,
+        protocol: &Protocol,
+        region: Option<&str>,
+        vars: &std::collections::BTreeMap<&str, &str>,
+    ) -> Result<ServiceTarget, Error> {
+        let candidates: Vec<&ServiceDef> = self
+            .targets
+            .iter()
+            .filter(|t| region.is_none() || t.region == region)
+            .collect();
+        let chosen = candidates
+            .iter()
+            .find(|t| t.protocol == *protocol)
+            .or(candidates.first())
+            .copied()
+            .ok_or_else(|| Error::Unsupported(format!("no service target for {}", self.id)))?;
+        chosen.target_with(&self.id, vars)
     }
 }
 
@@ -323,15 +400,29 @@ impl Client {
         region: Option<&str>,
         auth: AuthKind,
     ) -> Result<Arc<dyn Adapter>, Error> {
+        self.bind_provider_with(provider, protocol, region, auth, &Default::default())
+    }
+
+    /// [`Self::bind_provider`] with endpoint variables for profiles whose
+    /// `base_url` is a per-resource template (`{name}` placeholders, e.g.
+    /// Azure resource names or Cloudflare account ids).
+    pub fn bind_provider_with(
+        &self,
+        provider: &str,
+        protocol: Option<Protocol>,
+        region: Option<&str>,
+        auth: AuthKind,
+        vars: &std::collections::BTreeMap<&str, &str>,
+    ) -> Result<Arc<dyn Adapter>, Error> {
         let profile = self
             .catalog
             .resolve(provider)
             .ok_or_else(|| Error::Unsupported(format!("unknown provider {provider:?}")))?;
-        let target = profile
-            .target_for(&protocol.unwrap_or_else(|| profile.targets[0].protocol.clone()), region)
-            .ok_or_else(|| {
-                Error::Unsupported(format!("no service target for {provider}"))
-            })?;
+        let target = profile.try_target_for(
+            &protocol.unwrap_or_else(|| profile.targets[0].protocol.clone()),
+            region,
+            vars,
+        )?;
         self.catalog.bind(
             target,
             auth,

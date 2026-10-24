@@ -443,5 +443,64 @@ pub fn profiles() -> Vec<ProviderProfile> {
             targets: vec![target(CHAT, "https://api.githubcopilot.com")],
             catalogue: Some("github-copilot"),
         },
+        // Per-resource providers: base_url carries `{name}` placeholders —
+        // materialize via `Client::bind_provider_with` /
+        // `ServiceDef::target_with`.
+        ProviderProfile {
+            id: "azure-openai".into(),
+            name: "Azure OpenAI",
+            aliases: &["azure"],
+            auth: vec![AuthSpec::ApiKey, AuthSpec::Bearer],
+            targets: vec![
+                target(RESP, "https://{resource}.openai.azure.com/openai/v1"),
+                target(CHAT, "https://{resource}.openai.azure.com/openai/v1"),
+            ],
+            catalogue: Some("azure-openai"),
+        },
+        ProviderProfile {
+            id: "azure-ai-foundry".into(),
+            name: "Azure AI Foundry",
+            aliases: &["azure-foundry"],
+            auth: vec![AuthSpec::ApiKey, AuthSpec::Bearer],
+            targets: vec![
+                target(RESP, "https://{resource}.services.ai.azure.com/openai/v1"),
+                target(ANTH, "https://{resource}.services.ai.azure.com/anthropic/v1"),
+            ],
+            catalogue: Some("azure-ai-foundry"),
+        },
+        ProviderProfile {
+            id: "cloudflare-ai-gateway".into(),
+            name: "Cloudflare AI Gateway",
+            aliases: &["cf-gateway"],
+            auth: vec![AuthSpec::ApiKey, AuthSpec::Bearer],
+            targets: vec![target(
+                CHAT,
+                "https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}",
+            )],
+            catalogue: Some("cloudflare-ai-gateway"),
+        },
+        ProviderProfile {
+            id: "cloudflare-workers-ai".into(),
+            name: "Cloudflare Workers AI",
+            aliases: &["workers-ai"],
+            auth: vec![AuthSpec::ApiKey],
+            targets: vec![target(
+                CHAT,
+                "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
+            )],
+            catalogue: Some("cloudflare-workers-ai"),
+        },
+        ProviderProfile {
+            id: "oci-generativeai".into(),
+            name: "OCI Generative AI",
+            aliases: &["oci-genai"],
+            auth: vec![AuthSpec::CloudIdentity],
+            targets: vec![region(
+                CHAT,
+                "https://inference.generativeai.{region}.oci.oraclecloud.com/20231130",
+                "us-chicago-1",
+            )],
+            catalogue: Some("oci-generativeai"),
+        },
     ]
 }

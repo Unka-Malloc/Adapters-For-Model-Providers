@@ -115,13 +115,15 @@ impl OllamaAdapter {
             for part in &mut m.content {
                 if let ContentPart::Media { kind: _, source, .. } = part {
                     if let MediaSource::Resource(id) = source {
-                        let rr = ResourceRef {
+                        let mut rr = ResourceRef {
                             id: id.clone(),
                             media_type: None,
                         };
-                        let data = effects.read_resource(&rr, ctrl).await?;
+                        let data = effects.read_resource(&mut rr, ctrl).await?;
                         *source = MediaSource::Inline {
-                            media_type: "application/octet-stream".into(),
+                            media_type: rr
+                                .media_type
+                                .unwrap_or_else(|| "application/octet-stream".into()),
                             data,
                         };
                     }

@@ -701,10 +701,11 @@ struct StubEffects;
 impl EffectHost for StubEffects {
     async fn read_resource(
         &self,
-        resource: &ResourceRef,
+        resource: &mut ResourceRef,
         _ctrl: &RequestControl,
     ) -> Result<bytes::Bytes, Error> {
         assert_eq!(resource.id, "res-1");
+        resource.media_type = Some("image/png".into());
         Ok(bytes::Bytes::from_static(b"\x89PNG"))
     }
 }

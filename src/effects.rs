@@ -47,10 +47,12 @@ pub trait Process: Send {
 /// (LicoUp gateway, CLI, test harness); the library holds only the port.
 #[async_trait::async_trait]
 pub trait EffectHost: Send + Sync {
-    /// Read a host-resolved resource by id.
+    /// Read a host-resolved resource by id. Implementations may fill
+    /// `resource.media_type` so callers can inline the bytes with a real
+    /// MIME type instead of guessing.
     async fn read_resource(
         &self,
-        resource: &ResourceRef,
+        resource: &mut ResourceRef,
         ctrl: &RequestControl,
     ) -> Result<bytes::Bytes, Error> {
         let _ = ctrl;

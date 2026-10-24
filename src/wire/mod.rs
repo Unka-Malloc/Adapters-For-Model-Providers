@@ -114,6 +114,106 @@ pub fn encode_stream_start(dialect: WireDialect, model: &str) -> Vec<SseEvent> {
 }
 
 // ---------------------------------------------------------------------------
+// Bridge: dialect request → adapter → dialect response, in one call
+// ---------------------------------------------------------------------------
+
+use std::sync::Arc;
+
+/// A joined relay for gateway-style consumers: holds an adapter plus the
+/// client-facing dialect and performs the full decode → adapter call →
+/// encode trip in one method. Conversion losses are returned alongside
+/// results; the host decides whether to log, reject, or forward them.
+pub struct WireBridge {
+    adapter: Arc<dyn Adapter>,
+    dialect: WireDialect,
+}
+
+impl WireBridge {
+    pub fn new(adapter: Arc<dyn Adapter>, dialect: WireDialect) -> Self {
+        Self { adapter, dialect }
+    }
+
+    /// Non-streaming chat: decode `body` in this bridge's dialect, run it
+    /// through the adapter, encode the output back. The returned model
+    /// name echoed to the client comes from the client's own request.
+    pub async fn chat(
+        &self,
+        body: &[u8],
+        ctrl: &RequestControl,
+    ) -> Result<(Value, ConversionReport), Error> {
+        let (request, mut report) = decode_chat_request(self.dialect, body)?;
+        let model = request.model.clone();
+        let output = self.adapter.chat(request, ctrl).await?;
+        let (value, out_report) = encode_chat_output(self.dialect, &output, &model);
+        report.losses.extend(out_report.losses);
+        Ok((value, report))
+    }
+
+    /// Streaming chat: returns a stream of dialect-shaped SSE frames.
+    /// Preamble frames emit first; canonical events pass through the
+    /// dialect encoder; `finish` frames terminate the stream.
+    pub async fn chat_stream(
+        &self,
+        body: &[u8],
+        ctrl: &RequestControl,
+    ) -> Result<DynStream<'static, SseEvent>, Error> {
+        let (request, _report) = decode_chat_request(self.dialect, body)?;
+        let model = request.model.clone();
+        let inner = self.adapter.chat_stream(request, ctrl).await?;
+        Ok(Box::pin(BridgeStream {
+            pending: stream_encoder(self.dialect, &model).preamble().into(),
+            encoder: stream_encoder(self.dialect, &model),
+            inner,
+            finished: false,
+        }))
+    }
+}
+
+/// The stream behind [`WireBridge::chat_stream`]: drains pending frames
+/// first, then translates canonical events through the dialect encoder,
+/// and emits terminator frames once the inner stream ends.
+struct BridgeStream {
+    pending: std::collections::VecDeque<SseEvent>,
+    encoder: Box<dyn StreamEncoder>,
+    inner: DynStream<'static, StreamEvent>,
+    finished: bool,
+}
+
+impl futures_core::Stream for BridgeStream {
+    type Item = Result<SseEvent, Error>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        loop {
+            if let Some(frame) = self.pending.pop_front() {
+                return std::task::Poll::Ready(Some(Ok(frame)));
+            }
+            if self.finished {
+                return std::task::Poll::Ready(None);
+            }
+            match std::pin::Pin::new(&mut self.inner).poll_next(cx) {
+                std::task::Poll::Pending => return std::task::Poll::Pending,
+                std::task::Poll::Ready(None) => {
+                    self.finished = true;
+                    let frames = self.encoder.finish();
+                    self.pending.extend(frames);
+                }
+                std::task::Poll::Ready(Some(Err(e))) => {
+                    self.finished = true;
+                    return std::task::Poll::Ready(Some(Err(e)));
+                }
+                std::task::Poll::Ready(Some(Ok(ev))) => {
+                    let frames = self.encoder.encode(&ev);
+                    self.pending.extend(frames);
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Shared internals
 // ---------------------------------------------------------------------------
 
