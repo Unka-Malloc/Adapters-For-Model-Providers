@@ -14,6 +14,7 @@ pub mod oauth;
 pub mod protocols;
 pub mod providers;
 pub mod transport;
+pub mod wire;
 
 pub use api::*;
 pub use auth::*;
