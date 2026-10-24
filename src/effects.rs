@@ -4,6 +4,8 @@
 //! opens user files, spawns runtimes or reads another application's
 //! login state directly — every effect crosses this port explicitly.
 
+use std::time::Duration;
+
 use crate::api::{DynStream, Error, RequestControl};
 
 /// A named host-resolved resource (file attachment, model asset, …).
@@ -70,5 +72,37 @@ pub trait EffectHost: Send + Sync {
             "host cannot spawn {:?}",
             spec.requirement
         )))
+    }
+
+    /// Redirect landing point for interactive authorization flows.
+    /// `None` means the host cannot capture callbacks (device flow or
+    /// paste-back flows still work).
+    fn redirect_uri(&self) -> Option<url::Url> {
+        None
+    }
+
+    /// Present an authorization URL to the user: open a browser, show
+    /// a QR code or display text — the host chooses.
+    async fn present_url(&self, url: &url::Url, ctrl: &RequestControl) -> Result<(), Error> {
+        let _ = ctrl;
+        Err(Error::Unsupported(format!(
+            "host cannot present {url}"
+        )))
+    }
+
+    /// Await the provider's redirect and return the full callback URL.
+    /// Implementations listen on a loopback port, capture a custom
+    /// scheme or accept a paste-back.
+    async fn await_callback(&self, ctrl: &RequestControl) -> Result<String, Error> {
+        let _ = ctrl;
+        Err(Error::Unsupported("host cannot capture auth callbacks".into()))
+    }
+
+    /// Wait `duration` before continuing a flow (device-code polling,
+    /// refresh scheduling). The library carries no async runtime, so
+    /// sleeping itself is a host effect; cancellation must interrupt it.
+    async fn sleep(&self, duration: Duration, ctrl: &RequestControl) -> Result<(), Error> {
+        let _ = (duration, ctrl);
+        Err(Error::Unsupported("host supplies no timer".into()))
     }
 }

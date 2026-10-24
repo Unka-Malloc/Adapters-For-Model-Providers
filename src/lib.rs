@@ -10,6 +10,7 @@ pub mod api;
 pub mod auth;
 pub mod catalog;
 pub mod effects;
+pub mod oauth;
 pub mod protocols;
 pub mod providers;
 pub mod transport;
