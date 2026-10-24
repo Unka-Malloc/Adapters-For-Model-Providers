@@ -6,7 +6,7 @@
 //! access surface, never live availability. The full inventory
 //! reconciliation accrues here; entries cite only documented endpoints.
 
-use super::{AuthSpec, ProviderProfile, ServiceDef};
+use super::super::{AuthSpec, ProviderProfile, ServiceDef};
 use crate::api::Protocol;
 
 const CHAT: Protocol = Protocol::OpenAiChatCompletions;
@@ -39,8 +39,8 @@ fn region(protocol: Protocol, base_url: &'static str, region: &'static str) -> S
 const KEY: &[AuthSpec] = &[AuthSpec::ApiKey];
 const BEARER: &[AuthSpec] = &[AuthSpec::Bearer];
 
-/// The reconciled profile set. Ordered for readability; lookup is by id.
-pub fn builtin_profiles() -> Vec<ProviderProfile> {
+/// Major providers: protocol-family owners and documented majors.
+pub fn profiles() -> Vec<ProviderProfile> {
     vec![
         ProviderProfile {
             id: "openai".into(),
