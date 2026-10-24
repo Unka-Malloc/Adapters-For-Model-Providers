@@ -4,6 +4,8 @@
 //! shared by every service target speaking that protocol family; profile
 //! differences ride request `extensions` or adapter-level handling.
 
+pub mod anthropic_messages;
+pub mod gemini_generate;
 pub mod openai_chat;
 pub mod openai_responses;
 

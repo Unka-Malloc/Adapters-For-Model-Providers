@@ -101,11 +101,29 @@ async fn protocol_preference_selects_target() {
 }
 
 #[tokio::test]
+async fn anthropic_and_gemini_bind_through_profiles() {
+    let (client, _) = client();
+    let anthropic = client
+        .bind_provider("anthropic", None, None, AuthKind::ApiKey)
+        .unwrap();
+    assert_eq!(anthropic.target().protocol, Protocol::AnthropicMessages);
+    let gemini = client
+        .bind_provider("gemini", None, None, AuthKind::ApiKey)
+        .unwrap();
+    assert_eq!(gemini.target().protocol, Protocol::GeminiGenerateContent);
+}
+
+#[tokio::test]
 async fn unregistered_protocol_reports_unsupported() {
     let (client, _) = client();
-    // Anthropic's adapter is not registered in the builtin catalog yet;
-    // binding must fail explicitly, not fall through to another protocol.
-    let result = client.bind_provider("anthropic", None, None, AuthKind::ApiKey);
+    // Bedrock's adapter is not registered yet; binding must fail
+    // explicitly, not fall through to another protocol family.
+    let target = ServiceTarget::new(
+        "bedrock",
+        Protocol::BedrockConverse,
+        url::Url::parse("https://bedrock-runtime.us-east-1.amazonaws.com").unwrap(),
+    );
+    let result = client.bind_target(target, AuthKind::Bearer);
     match result {
         Err(Error::Unsupported(_)) => {}
         Err(other) => panic!("expected Unsupported, got {other:?}"),

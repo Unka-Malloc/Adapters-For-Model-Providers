@@ -5,6 +5,10 @@
 //! declared per provider in later milestones; adapters here are the
 //! protocol-family implementations they bind.
 
+pub mod anthropic;
+pub mod gemini;
 pub mod openai;
 
+pub use anthropic::AnthropicAdapter;
+pub use gemini::GeminiAdapter;
 pub use openai::OpenAiAdapter;

@@ -134,6 +134,8 @@ impl Catalog {
     pub fn with_builtin_adapters() -> Self {
         let mut c = Self::new(builtin_profiles());
         c.register_openai();
+        c.register_anthropic();
+        c.register_gemini();
         c
     }
 
@@ -203,6 +205,34 @@ impl Catalog {
         self.adapters
             .insert(Protocol::OpenAiChatCompletions, ctor.clone());
         self.adapters.insert(Protocol::OpenAiResponses, ctor);
+    }
+
+    fn register_anthropic(&mut self) {
+        self.adapters.insert(
+            Protocol::AnthropicMessages,
+            Arc::new(|target, auth, transport, resolver, effects| {
+                let adapter =
+                    crate::providers::AnthropicAdapter::new(target, auth, transport, resolver)?;
+                Ok(Arc::new(match effects {
+                    Some(e) => adapter.with_effects(e),
+                    None => adapter,
+                }))
+            }),
+        );
+    }
+
+    fn register_gemini(&mut self) {
+        self.adapters.insert(
+            Protocol::GeminiGenerateContent,
+            Arc::new(|target, auth, transport, resolver, effects| {
+                let adapter =
+                    crate::providers::GeminiAdapter::new(target, auth, transport, resolver)?;
+                Ok(Arc::new(match effects {
+                    Some(e) => adapter.with_effects(e),
+                    None => adapter,
+                }))
+            }),
+        );
     }
 }
 
