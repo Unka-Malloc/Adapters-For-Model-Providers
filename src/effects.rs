@@ -34,8 +34,14 @@ pub struct ProcessSpec {
 /// Adapters read incrementally; the host enforces lifecycle and cleanup.
 pub trait Process: Send {
     /// stdout/stderr merged byte stream (pull-based backpressure).
+    ///
+    /// Implementations must return a *resumable* stream: consumers may
+    /// re-call `output` after a dropped or completed poll and continue
+    /// where the previous stream left off. A fresh competing reader per
+    /// call would lose bytes the adapter already owns.
     fn output(&mut self) -> DynStream<'_, bytes::Bytes>;
-    /// Write bytes to the process stdin.
+    /// Write bytes to the process stdin. There is no explicit
+    /// close-input signal — drop/termination ends input.
     fn send_input(&mut self, data: bytes::Bytes) -> Result<(), Error>;
     /// Ask the process to exit; `wait` reports the final status.
     fn terminate(&mut self) -> Result<(), Error>;

@@ -8,6 +8,7 @@ pub mod anthropic_messages;
 pub mod bedrock_converse;
 pub mod cohere;
 pub mod gemini_generate;
+pub mod gemini_media;
 pub mod ollama;
 pub mod openai_chat;
 pub mod openai_data;

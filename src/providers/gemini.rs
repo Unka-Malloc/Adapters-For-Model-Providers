@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::api::*;
 use crate::auth::{AuthKind, Credential, CredentialResolver, CredentialScope};
 use crate::effects::{EffectHost, ResourceRef};
-use crate::protocols::gemini_generate;
+use crate::protocols::{gemini_generate, gemini_media};
 use crate::transport::{EventStream, HttpRequest, Transport};
 
 /// Adapter for the Gemini generateContent protocol family.
@@ -53,6 +53,7 @@ impl GeminiAdapter {
         self
     }
 
+    #[allow(unreachable_patterns)] // reachable only to downstream crates (non_exhaustive enums)
     async fn authenticate(&self) -> Result<http::HeaderMap, Error> {
         let scope = CredentialScope {
             target: &self.target,
@@ -77,6 +78,11 @@ impl GeminiAdapter {
                         |_| Error::Credential("credential is not a valid header value".into()),
                     )?,
                 );
+            }
+            other => {
+                return Err(Error::Unsupported(format!(
+                    "credential kind {other:?} is not yet implemented for this adapter"
+                )));
             }
         }
         Ok(headers)
@@ -169,6 +175,26 @@ impl GeminiAdapter {
         }
         Ok(res)
     }
+
+    /// `v1beta/{operation}[suffix]` — each `/`-separated segment of the
+    /// provider's opaque operation name is percent-encoded as a path
+    /// segment; `suffix` (e.g. `:cancel`) is appended after the last one.
+    fn operation_url(&self, name: &str, suffix: &str) -> url::Url {
+        let mut url = self.target.endpoint("v1beta");
+        let Ok(mut segments) = url.path_segments_mut() else {
+            return self.target.endpoint(&format!("v1beta/{name}{suffix}"));
+        };
+        for segment in name.trim_matches('/').split('/') {
+            if !segment.is_empty() {
+                segments.push(segment);
+            }
+        }
+        drop(segments);
+        if !suffix.is_empty() {
+            url.set_path(&format!("{}{suffix}", url.path()));
+        }
+        url
+    }
 }
 
 #[async_trait::async_trait]
@@ -206,5 +232,80 @@ impl Adapter for GeminiAdapter {
             res.body,
             Box::new(gemini_generate::GenerateStreamDecoder::new()),
         )))
+    }
+
+    /// `POST v1beta/models/{model}:predict` — the Imagen-style image
+    /// surface: `predictions[].bytesBase64Encoded` decode into inline
+    /// media.
+    async fn image(&self, req: ImageRequest, ctrl: &RequestControl) -> Result<MediaOutput, Error> {
+        let headers = self.authenticate().await?;
+        let body = gemini_media::build_image_request(&req)?;
+        let mut http = HttpRequest::post_json(
+            self.target
+                .endpoint(&format!("v1beta/models/{}:predict", req.model)),
+            body,
+        );
+        for (k, v) in headers.iter() {
+            http.headers.append(k, v.clone());
+        }
+        let body = self.send_json(http, ctrl).await?;
+        gemini_media::decode_image_output(&body)
+    }
+
+    /// Veo video generation is a long-running operation, not a
+    /// synchronous call: submit through `submit_job`, poll `job_state`.
+    async fn video(&self, _req: VideoRequest, _ctrl: &RequestControl) -> Result<MediaOutput, Error> {
+        Err(self.unsupported(
+            "video (Veo runs on predictLongRunning; use submit_job + job_state)",
+        ))
+    }
+
+    /// `POST v1beta/models/{model}:predictLongRunning` — only
+    /// `JobOperation::Video` maps onto this wire; chat, embed, image and
+    /// audio are synchronous surfaces on Gemini and answer `Unsupported`.
+    async fn submit_job(&self, op: JobOperation, ctrl: &RequestControl) -> Result<JobHandle, Error> {
+        let JobOperation::Video(req) = &op else {
+            return Err(self.unsupported(
+                "submit_job for this operation (only video is a long-running job on Gemini)",
+            ));
+        };
+        let headers = self.authenticate().await?;
+        let body = gemini_media::build_video_request(req)?;
+        let mut http = HttpRequest::post_json(
+            self.target
+                .endpoint(&format!("v1beta/models/{}:predictLongRunning", req.model)),
+            body,
+        );
+        for (k, v) in headers.iter() {
+            http.headers.append(k, v.clone());
+        }
+        let body = self.send_json(http, ctrl).await?;
+        gemini_media::decode_operation_handle(&self.target, &body)
+    }
+
+    /// `GET v1beta/{operation}` — poll the long-running operation.
+    async fn job_state(&self, handle: &JobHandle, ctrl: &RequestControl) -> Result<JobState, Error> {
+        let headers = self.authenticate().await?;
+        let mut http = HttpRequest::get(self.operation_url(&handle.id, ""));
+        for (k, v) in headers.iter() {
+            http.headers.append(k, v.clone());
+        }
+        let body = self.send_json(http, ctrl).await?;
+        gemini_media::decode_operation_state(&body)
+    }
+
+    /// `POST v1beta/{operation}:cancel` — the Veo LRO surface supports
+    /// the cancel verb.
+    async fn cancel_job(&self, handle: &JobHandle, ctrl: &RequestControl) -> Result<(), Error> {
+        let headers = self.authenticate().await?;
+        let mut http = HttpRequest::post_json(
+            self.operation_url(&handle.id, ":cancel"),
+            serde_json::json!({}),
+        );
+        for (k, v) in headers.iter() {
+            http.headers.append(k, v.clone());
+        }
+        self.send_json(http, ctrl).await?;
+        Ok(())
     }
 }
