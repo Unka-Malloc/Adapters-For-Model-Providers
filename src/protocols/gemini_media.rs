@@ -19,7 +19,7 @@ use crate::protocols::gemini_generate::provider_error;
 /// errors. The `error` key is *not* consumed here — each decoder decides
 /// whether it is a hard provider error or a failed job result.
 fn parse(body: &[u8], what: &str) -> Result<Value, Error> {
-    serde_json::from_slice(body).map_err(|e| Error::Protocol(format!("{what}: {e}")))
+    serde_json::from_slice(body).map_err(|e| Error::UpstreamProtocol(format!("{what}: {e}")))
 }
 
 /// Fields not claimed by the canonical mapping stay inspectable verbatim.
@@ -108,14 +108,14 @@ pub fn decode_image_output(body: &[u8]) -> Result<MediaOutput, Error> {
     }
     let predictions = v["predictions"]
         .as_array()
-        .ok_or_else(|| Error::Protocol("predict response missing predictions[]".into()))?;
+        .ok_or_else(|| Error::UpstreamProtocol("predict response missing predictions[]".into()))?;
     let mut media = Vec::with_capacity(predictions.len());
     let mut extras = Vec::with_capacity(predictions.len());
     let mut any_extra = false;
     for p in predictions {
         let b64 = p["bytesBase64Encoded"]
             .as_str()
-            .ok_or_else(|| Error::Protocol("prediction carries no bytesBase64Encoded".into()))?;
+            .ok_or_else(|| Error::UpstreamProtocol("prediction carries no bytesBase64Encoded".into()))?;
         let media_type = p["mimeType"]
             .as_str()
             .unwrap_or("application/octet-stream")
@@ -123,7 +123,7 @@ pub fn decode_image_output(body: &[u8]) -> Result<MediaOutput, Error> {
         media.push(MediaSource::Inline {
             media_type,
             data: base64_decode(b64)
-                .map_err(|_| Error::Protocol("invalid base64 in prediction".into()))?,
+                .map_err(|_| Error::UpstreamProtocol("invalid base64 in prediction".into()))?,
         });
         let extra = unclaimed(p, &["bytesBase64Encoded", "mimeType"]);
         any_extra |= !extra.is_empty();
@@ -180,7 +180,7 @@ pub fn decode_operation_handle(target: &ServiceTarget, body: &[u8]) -> Result<Jo
     }
     let name = v["name"]
         .as_str()
-        .ok_or_else(|| Error::Protocol("operation response missing name".into()))?;
+        .ok_or_else(|| Error::UpstreamProtocol("operation response missing name".into()))?;
     Ok(JobHandle {
         provider: target.provider.clone(),
         protocol: target.protocol.clone(),

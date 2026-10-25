@@ -243,7 +243,7 @@ fn encode_tool_choice(choice: &ToolChoice) -> Result<Option<Value>, Error> {
 /// Decode a buffered `/v2/chat` response.
 pub fn decode_response(body: &[u8]) -> Result<Output, Error> {
     let v: Value = serde_json::from_slice(body)
-        .map_err(|e| Error::Protocol(format!("cohere chat response: {e}")))?;
+        .map_err(|e| Error::UpstreamProtocol(format!("cohere chat response: {e}")))?;
     if let Some(err) = v.get("error").filter(|e| e.is_object()) {
         return Err(provider_error(None, err));
     }
@@ -316,7 +316,7 @@ fn decode_tool_call(v: &Value) -> Result<ToolCall, Error> {
     let function = &v["function"];
     let arguments = match &function["arguments"] {
         Value::String(s) => serde_json::from_str(s)
-            .map_err(|e| Error::Protocol(format!("tool call arguments not JSON: {e}")))?,
+            .map_err(|e| Error::UpstreamProtocol(format!("tool call arguments not JSON: {e}")))?,
         other => other.clone(),
     };
     Ok(ToolCall {
@@ -434,15 +434,15 @@ fn embed_image(source: &MediaSource) -> Result<Value, Error> {
 /// Decode a `/v2/embed` response.
 pub fn decode_embed(body: &[u8]) -> Result<EmbedOutput, Error> {
     let v: Value = serde_json::from_slice(body)
-        .map_err(|e| Error::Protocol(format!("cohere embed response: {e}")))?;
+        .map_err(|e| Error::UpstreamProtocol(format!("cohere embed response: {e}")))?;
     let floats = v["embeddings"]["float"]
         .as_array()
-        .ok_or_else(|| Error::Protocol("embed response has no float embeddings".into()))?;
+        .ok_or_else(|| Error::UpstreamProtocol("embed response has no float embeddings".into()))?;
     let mut embeddings = Vec::with_capacity(floats.len());
     for row in floats {
         let row = row
             .as_array()
-            .ok_or_else(|| Error::Protocol("embedding row is not an array".into()))?;
+            .ok_or_else(|| Error::UpstreamProtocol("embedding row is not an array".into()))?;
         embeddings.push(row.iter().map(|n| n.as_f64().unwrap_or(0.0) as f32).collect());
     }
     let usage = v
@@ -514,10 +514,10 @@ pub fn build_rerank_request(req: &RerankRequest) -> Result<Value, Error> {
 /// result list is preserved in extensions whenever they appear.
 pub fn decode_rerank(body: &[u8]) -> Result<RerankOutput, Error> {
     let v: Value = serde_json::from_slice(body)
-        .map_err(|e| Error::Protocol(format!("cohere rerank response: {e}")))?;
+        .map_err(|e| Error::UpstreamProtocol(format!("cohere rerank response: {e}")))?;
     let results = v["results"]
         .as_array()
-        .ok_or_else(|| Error::Protocol("rerank response has no results".into()))?;
+        .ok_or_else(|| Error::UpstreamProtocol("rerank response has no results".into()))?;
     let mut hits = Vec::with_capacity(results.len());
     let mut has_extras = false;
     for r in results {
@@ -581,10 +581,10 @@ pub fn build_classify_request(req: &ClassifyRequest) -> Result<Value, Error> {
 /// per-label confidence maps have no canonical slot.
 pub fn decode_classify(body: &[u8]) -> Result<ClassifyOutput, Error> {
     let v: Value = serde_json::from_slice(body)
-        .map_err(|e| Error::Protocol(format!("cohere classify response: {e}")))?;
+        .map_err(|e| Error::UpstreamProtocol(format!("cohere classify response: {e}")))?;
     let classifications = v["classifications"]
         .as_array()
-        .ok_or_else(|| Error::Protocol("classify response has no classifications".into()))?;
+        .ok_or_else(|| Error::UpstreamProtocol("classify response has no classifications".into()))?;
     let mut predictions = Vec::with_capacity(classifications.len());
     for (i, c) in classifications.iter().enumerate() {
         predictions.push(Classification {
@@ -698,7 +698,7 @@ impl crate::transport::SseEventDecoder for ChatStreamDecoder {
             return Ok(Vec::new());
         }
         let v: Value = serde_json::from_str(&event.data)
-            .map_err(|e| Error::Protocol(format!("cohere stream frame: {e}")))?;
+            .map_err(|e| Error::UpstreamProtocol(format!("cohere stream frame: {e}")))?;
         if v.get("error").is_some() {
             return Err(provider_error(None, &v));
         }

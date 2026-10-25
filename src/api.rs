@@ -150,12 +150,12 @@ pub enum OperationKind {
 /// Whether a failed operation may be repeated without replaying billed work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RetrySafety {
-    /// Safe: the provider never accepted the work (connect refused,
+    /// Safe: the provider did not accept or bill the work (connect refused,
     /// local pre-send validation/conversion, explicit rejection, idempotent
     /// read).
     Safe,
-    /// Upstream acceptance is uncertain or confirmed: an automatic retry
-    /// could duplicate billed work. Only an explicit caller decision may
+    /// Unsafe: the provider may have accepted or billed the work, or
+    /// acceptance cannot be ruled out. Only an explicit caller decision may
     /// repeat it.
     Unsafe,
 }
@@ -719,11 +719,15 @@ pub enum Error {
     #[error("credentials: {0}")]
     Credential(String),
 
-    /// The upstream payload violated the protocol contract. Violations are
-    /// observed after the request was dispatched, so upstream work may
-    /// already have been accepted.
+    /// A local request, configuration or callback violated a protocol
+    /// contract before dispatch. No provider work could have been accepted.
     #[error("protocol violation: {0}")]
     Protocol(String),
+
+    /// The upstream payload violated the protocol contract after dispatch.
+    /// The provider may already have accepted or billed the work.
+    #[error("upstream protocol violation: {0}")]
+    UpstreamProtocol(String),
 
     /// Caller cancellation via `RequestControl::cancel`. Cancellation can
     /// race a request that has already reached the provider, so the
@@ -735,20 +739,23 @@ pub enum Error {
 impl Error {
     /// Whether an automatic retry is safe for this failure.
     ///
-    /// Only failures that provably occurred before dispatch are `Safe`:
-    /// connect refusal, local conversion/validation, unsupported
-    /// operations and credential generation. Cancellation, protocol
-    /// violations and mid-flight transport failures may follow upstream
-    /// acceptance, so repeating them could duplicate billed work.
+    /// `Safe` means the provider did not accept or bill the work: connect
+    /// refusal, local pre-send validation/conversion, unsupported
+    /// operations, credential generation, or an explicit provider
+    /// rejection. `Unsafe` means the provider may have accepted or billed
+    /// the work, or acceptance cannot be ruled out: cancellation,
+    /// upstream payload violations and mid-flight transport failures.
     pub fn retry_safety(&self) -> RetrySafety {
         match self {
             Error::Transport(e) => e.retry_safety(),
             Error::Provider { retry, .. } => *retry,
             Error::Unsupported(_) => RetrySafety::Safe,
-            // Local, pre-send failures.
-            Error::Conversion { .. } | Error::Credential(_) => RetrySafety::Safe,
+            // Local, pre-send failures cannot have billed upstream work.
+            Error::Conversion { .. } | Error::Credential(_) | Error::Protocol(_) => {
+                RetrySafety::Safe
+            }
             // Post-dispatch failures: upstream acceptance cannot be ruled out.
-            Error::Cancelled | Error::Protocol(_) => RetrySafety::Unsafe,
+            Error::Cancelled | Error::UpstreamProtocol(_) => RetrySafety::Unsafe,
         }
     }
 }

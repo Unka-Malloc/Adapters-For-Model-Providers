@@ -67,16 +67,32 @@ fn retry_safety_classification() {
     assert_eq!(e.retry_safety(), RetrySafety::Safe);
     let e = Error::Credential("entropy unavailable".into());
     assert_eq!(e.retry_safety(), RetrySafety::Safe);
+    // Local protocol validation happens before dispatch and cannot bill.
+    let e = Error::Protocol("request missing model".into());
+    assert_eq!(e.retry_safety(), RetrySafety::Safe);
 }
 
 #[test]
 fn post_dispatch_contract_errors_are_unsafe_to_retry() {
     // Caller cancellation can occur after the request reached the provider.
     assert_eq!(Error::Cancelled.retry_safety(), RetrySafety::Unsafe);
-    // Protocol violations are discovered after dispatch, so work may have
-    // already been accepted upstream.
-    let e = Error::Protocol("response has no choices".into());
+    // An upstream payload violation is observed after dispatch, so work may
+    // already have been accepted upstream.
+    let e = Error::UpstreamProtocol("response has no choices".into());
     assert_eq!(e.retry_safety(), RetrySafety::Unsafe);
+}
+
+#[test]
+fn local_wire_decode_failure_is_a_safe_protocol_error() {
+    // A real local, pre-dispatch producer: the request decoder rejects a
+    // malformed body before any provider request exists.
+    let err = a4mp::wire::decode_chat_request(
+        a4mp::wire::WireDialect::OpenAiChatCompletions,
+        br#"{"messages":[]}"#,
+    )
+    .unwrap_err();
+    assert!(matches!(err, Error::Protocol(_)), "{err:?}");
+    assert_eq!(err.retry_safety(), RetrySafety::Safe);
 }
 
 #[test]

@@ -149,7 +149,7 @@ impl RealtimeDecoder {
     /// complete call.
     pub fn decode(&mut self, frame: &[u8]) -> Result<Vec<RealtimeEvent>, Error> {
         let v: Value = serde_json::from_slice(frame)
-            .map_err(|e| Error::Protocol(format!("realtime server event: {e}")))?;
+            .map_err(|e| Error::UpstreamProtocol(format!("realtime server event: {e}")))?;
         let ty = v["type"].as_str().unwrap_or_default();
         match ty {
             "error" => Err(provider_error(None, &v)),
@@ -185,7 +185,7 @@ impl RealtimeDecoder {
             "response.function_call_arguments.done" => {
                 let arguments = match &v["arguments"] {
                     Value::String(s) => serde_json::from_str(s).map_err(|e| {
-                        Error::Protocol(format!("function call arguments not JSON: {e}"))
+                        Error::UpstreamProtocol(format!("function call arguments not JSON: {e}"))
                     })?,
                     other => other.clone(),
                 };

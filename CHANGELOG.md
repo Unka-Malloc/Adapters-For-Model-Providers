@@ -7,17 +7,25 @@ All notable changes to `a4mp` are recorded here. Versions follow
 
 ### Fixed
 
-- `Error::Cancelled`, `Error::Protocol` and `TransportError::Cancelled` now
-  report `RetrySafety::Unsafe`. These failures can surface after a request
-  reached the provider, so an automatic retry could repeat billed input and
-  output work. Connect refusals and local pre-send failures remain `Safe`.
-- `RetrySafety` documentation now matches that boundary.
+- `Error::Cancelled`, the new `Error::UpstreamProtocol`, and
+  `TransportError::Cancelled` now report `RetrySafety::Unsafe`. These
+  failures can surface after a request reached the provider, so an automatic
+  retry could repeat billed input and output work.
+- Post-dispatch response, stream, OAuth-token, broker and batch-status
+  protocol violations now use `Error::UpstreamProtocol`. Local pre-dispatch
+  validation (`Error::Protocol`, conversion, credentials, unsupported
+  operations) and explicit provider rejections remain `Safe`.
+- `RetrySafety` and error documentation now describe the boundary in billing
+  terms: `Safe` means the provider did not accept or bill the work.
 
 ### Tests
 
-- Contract coverage for cancelled transport errors, `Error::Cancelled` and
-  `Error::Protocol`, plus a real-socket transport test that cancels after
-  the request has been dispatched.
+- Contract coverage for cancelled transport errors, `Error::Cancelled`,
+  local `Error::Protocol` (including a real wire-decoder failure) and
+  `Error::UpstreamProtocol`, plus a real-socket transport test that cancels
+  after the request has been dispatched.
+- The README quickstart now compiles against the current `Client` and
+  `RequestControl` APIs.
 
 ## [0.3.0] - 2026-10-25
 

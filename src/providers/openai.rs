@@ -522,7 +522,7 @@ impl Adapter for OpenAiAdapter {
                 Ok(JobState::Failed { code, message })
             }
             "cancelled" => Ok(JobState::Cancelled),
-            other => Err(Error::Protocol(format!("unknown batch status {other:?}"))),
+            other => Err(Error::UpstreamProtocol(format!("unknown batch status {other:?}"))),
         }
     }
 

@@ -598,7 +598,7 @@ fn decode_rejects_non_json_and_preserves_unknown_events() {
     let mut dec = openai_realtime::RealtimeDecoder::new(&RealtimeConfig::default());
     assert!(matches!(
         dec.decode(b"not json"),
-        Err(Error::Protocol(_))
+        Err(Error::UpstreamProtocol(_))
     ));
     let events = dec
         .decode(br#"{"type":"some.future.event","payload":1}"#)

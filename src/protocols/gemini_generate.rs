@@ -251,7 +251,7 @@ fn encode_tool_config(choice: &ToolChoice) -> Value {
 /// Decode a buffered generateContent response.
 pub fn decode_response(body: &[u8]) -> Result<Output, Error> {
     let v: Value = serde_json::from_slice(body)
-        .map_err(|e| Error::Protocol(format!("generateContent response: {e}")))?;
+        .map_err(|e| Error::UpstreamProtocol(format!("generateContent response: {e}")))?;
     if v.get("error").filter(|e| !e.is_null()).is_some() {
         return Err(provider_error(None, &v));
     }
@@ -261,7 +261,7 @@ pub fn decode_response(body: &[u8]) -> Result<Output, Error> {
     let candidate = v["candidates"]
         .as_array()
         .and_then(|c| c.first())
-        .ok_or_else(|| Error::Protocol("response has no candidates".into()))?;
+        .ok_or_else(|| Error::UpstreamProtocol("response has no candidates".into()))?;
     let mut calls = 0u32;
     let mut parts = Vec::new();
     if let Some(ps) = candidate["content"]["parts"].as_array() {
@@ -491,7 +491,7 @@ pub fn http_error(status: u16, body: &[u8]) -> Error {
 /// Shared with the other codecs to keep the alphabet consistent.
 fn base64_decode(s: &str) -> Result<bytes::Bytes, Error> {
     super::base64_decode(s)
-        .map_err(|_| Error::Protocol("invalid base64 in inlineData part".into()))
+        .map_err(|_| Error::UpstreamProtocol("invalid base64 in inlineData part".into()))
 }
 
 /// Stateful decoder: streamGenerateContent SSE frames → canonical
@@ -658,7 +658,7 @@ impl crate::transport::SseEventDecoder for GenerateStreamDecoder {
             return Ok(Vec::new());
         }
         let v: Value = serde_json::from_str(data)
-            .map_err(|e| Error::Protocol(format!("stream chunk: {e}")))?;
+            .map_err(|e| Error::UpstreamProtocol(format!("stream chunk: {e}")))?;
         if v.get("error").filter(|e| !e.is_null()).is_some() {
             return Err(provider_error(None, &v));
         }

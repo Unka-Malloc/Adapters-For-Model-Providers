@@ -335,7 +335,7 @@ fn codex_account_id_falls_back_to_id_token() {
 fn codex_account_id_missing_claim_is_protocol_error() {
     let access = fake_jwt(serde_json::json!({"sub": "user-1"}));
     match codex_account_id(&oauth_token(&access, serde_json::json!({}))) {
-        Err(Error::Protocol(_)) => {}
+        Err(Error::UpstreamProtocol(_)) => {}
         other => panic!("expected Protocol error, got {other:?}"),
     }
 }

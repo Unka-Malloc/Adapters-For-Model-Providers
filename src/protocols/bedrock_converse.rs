@@ -332,13 +332,13 @@ fn encode_tool_choice(choice: &ToolChoice) -> Result<Value, Error> {
 /// Decode a buffered Converse response.
 pub fn decode_response(body: &[u8]) -> Result<Output, Error> {
     let v: Value = serde_json::from_slice(body)
-        .map_err(|e| Error::Protocol(format!("converse response: {e}")))?;
+        .map_err(|e| Error::UpstreamProtocol(format!("converse response: {e}")))?;
     if v.get("output").is_none() {
         // A 2xx body without `output` violates the wire contract.
         if v.get("message").is_some() || v.get("__type").is_some() {
             return Err(provider_error(None, &v));
         }
-        return Err(Error::Protocol("converse response missing output".into()));
+        return Err(Error::UpstreamProtocol("converse response missing output".into()));
     }
     let mut parts = Vec::new();
     if let Some(blocks) = v["output"]["message"]["content"].as_array() {
@@ -566,7 +566,7 @@ impl EventStreamDecoder {
         if self.buf.is_empty() {
             Ok(())
         } else {
-            Err(Error::Protocol(
+            Err(Error::UpstreamProtocol(
                 "event-stream ended mid-frame (truncated body)".into(),
             ))
         }
@@ -582,7 +582,7 @@ impl EventStreamDecoder {
         let total = u32::from_be_bytes(self.buf[0..4].try_into().unwrap()) as usize;
         let headers_len = u32::from_be_bytes(self.buf[4..8].try_into().unwrap()) as usize;
         if total < PRELUDE + 4 || headers_len > total - PRELUDE - 4 {
-            return Err(Error::Protocol(
+            return Err(Error::UpstreamProtocol(
                 "event-stream frame lengths are inconsistent".into(),
             ));
         }
@@ -591,14 +591,14 @@ impl EventStreamDecoder {
         }
         let prelude_crc = u32::from_be_bytes(self.buf[8..12].try_into().unwrap());
         if crc32(&self.buf[0..8]) != prelude_crc {
-            return Err(Error::Protocol(
+            return Err(Error::UpstreamProtocol(
                 "event-stream prelude CRC mismatch".into(),
             ));
         }
         let message_crc =
             u32::from_be_bytes(self.buf[total - 4..total].try_into().unwrap());
         if crc32(&self.buf[0..total - 4]) != message_crc {
-            return Err(Error::Protocol(
+            return Err(Error::UpstreamProtocol(
                 "event-stream message CRC mismatch".into(),
             ));
         }
@@ -611,7 +611,7 @@ impl EventStreamDecoder {
 
 fn parse_headers(mut bytes: &[u8]) -> Result<Vec<(String, FrameValue)>, Error> {
     let mut headers = Vec::new();
-    let bad = || Error::Protocol("event-stream header section is malformed".into());
+    let bad = || Error::UpstreamProtocol("event-stream header section is malformed".into());
     while !bytes.is_empty() {
         let name_len = *bytes.first().ok_or_else(bad)? as usize;
         bytes = &bytes[1..];
@@ -634,7 +634,7 @@ fn parse_headers(mut bytes: &[u8]) -> Result<Vec<(String, FrameValue)>, Error> {
 /// Split `n` bytes off the front of a header-value buffer.
 fn take<'a>(b: &'a [u8], n: usize) -> Result<(&'a [u8], &'a [u8]), Error> {
     if b.len() < n {
-        Err(Error::Protocol(
+        Err(Error::UpstreamProtocol(
             "event-stream header value is truncated".into(),
         ))
     } else {
@@ -645,7 +645,7 @@ fn take<'a>(b: &'a [u8], n: usize) -> Result<(&'a [u8], &'a [u8]), Error> {
 /// Parse one typed header value; returns the value and the remaining
 /// bytes. Layouts follow the event-stream spec's fixed widths.
 fn parse_header_value(ty: u8, bytes: &[u8]) -> Result<(FrameValue, &[u8]), Error> {
-    let bad = || Error::Protocol("event-stream header value is truncated".into());
+    let bad = || Error::UpstreamProtocol("event-stream header value is truncated".into());
     Ok(match ty {
         0 => (FrameValue::Bool(true), bytes),
         1 => (FrameValue::Bool(false), bytes),
@@ -696,7 +696,7 @@ fn parse_header_value(ty: u8, bytes: &[u8]) -> Result<(FrameValue, &[u8]), Error
             (FrameValue::Uuid(v.try_into().unwrap()), rest)
         }
         _ => {
-            return Err(Error::Protocol(format!(
+            return Err(Error::UpstreamProtocol(format!(
                 "unknown event-stream header value type {ty}"
             )));
         }
@@ -748,7 +748,7 @@ impl ConverseStreamDecoder {
         match frame.header(":message-type").unwrap_or("event") {
             "event" => self.decode_event(frame),
             "exception" | "error" => Err(exception_error(frame)),
-            other => Err(Error::Protocol(format!(
+            other => Err(Error::UpstreamProtocol(format!(
                 "unknown event-stream message type {other:?}"
             ))),
         }
@@ -757,7 +757,7 @@ impl ConverseStreamDecoder {
     fn decode_event(&mut self, frame: &EventFrame) -> Result<Vec<StreamEvent>, Error> {
         let ty = frame.header(":event-type").unwrap_or_default().to_owned();
         let v: Value = serde_json::from_slice(&frame.payload).map_err(|e| {
-            Error::Protocol(format!("converse stream event {ty:?} is not JSON: {e}"))
+            Error::UpstreamProtocol(format!("converse stream event {ty:?} is not JSON: {e}"))
         })?;
         let mut out = Vec::new();
         match ty.as_str() {

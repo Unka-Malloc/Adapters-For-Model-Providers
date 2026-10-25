@@ -250,14 +250,14 @@ fn encode_tool_choice(choice: &ToolChoice) -> Value {
 /// Decode a buffered Chat Completions response.
 pub fn decode_response(body: &[u8]) -> Result<Output, Error> {
     let v: Value = serde_json::from_slice(body)
-        .map_err(|e| Error::Protocol(format!("chat completion response: {e}")))?;
+        .map_err(|e| Error::UpstreamProtocol(format!("chat completion response: {e}")))?;
     if let Some(err) = v.get("error") {
         return Err(provider_error(None, err));
     }
     let choice = v["choices"]
         .as_array()
         .and_then(|c| c.first())
-        .ok_or_else(|| Error::Protocol("response has no choices".into()))?;
+        .ok_or_else(|| Error::UpstreamProtocol("response has no choices".into()))?;
     let message = &choice["message"];
     let mut parts = Vec::new();
     if let Some(reasoning) = reasoning_text(message) {
@@ -315,7 +315,7 @@ fn decode_tool_call(v: &Value) -> Result<ToolCall, Error> {
     let function = &v["function"];
     let arguments = match &function["arguments"] {
         Value::String(s) => serde_json::from_str(s)
-            .map_err(|e| Error::Protocol(format!("tool call arguments not JSON: {e}")))?,
+            .map_err(|e| Error::UpstreamProtocol(format!("tool call arguments not JSON: {e}")))?,
         other => other.clone(),
     };
     Ok(ToolCall {
@@ -395,17 +395,17 @@ pub fn http_error(status: u16, body: &[u8]) -> Error {
 /// Unknown per-model fields ride `extensions` verbatim.
 pub fn decode_models(body: &[u8]) -> Result<Vec<ModelInfo>, Error> {
     let v: Value = serde_json::from_slice(body)
-        .map_err(|e| Error::Protocol(format!("models response is not JSON: {e}")))?;
+        .map_err(|e| Error::UpstreamProtocol(format!("models response is not JSON: {e}")))?;
     let data = v
         .get("data")
         .and_then(Value::as_array)
-        .ok_or_else(|| Error::Protocol("models response missing data[]".into()))?;
+        .ok_or_else(|| Error::UpstreamProtocol("models response missing data[]".into()))?;
     data.iter()
         .map(|m| {
             let id = m
                 .get("id")
                 .and_then(Value::as_str)
-                .ok_or_else(|| Error::Protocol("model entry missing id".into()))?
+                .ok_or_else(|| Error::UpstreamProtocol("model entry missing id".into()))?
                 .to_owned();
             let owned_by = m
                 .get("owned_by")
@@ -464,7 +464,7 @@ impl crate::transport::SseEventDecoder for ChatStreamDecoder {
             return Ok(Vec::new());
         }
         let v: Value = serde_json::from_str(data)
-            .map_err(|e| Error::Protocol(format!("stream chunk: {e}")))?;
+            .map_err(|e| Error::UpstreamProtocol(format!("stream chunk: {e}")))?;
         if v.get("error").is_some() {
             return Err(provider_error(None, &v));
         }

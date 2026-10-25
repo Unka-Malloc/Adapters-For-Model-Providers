@@ -43,14 +43,14 @@ pub fn build_image_request(req: &ImageRequest) -> Result<Value, Error> {
 /// channel.
 pub fn decode_image_output(body: &[u8]) -> Result<MediaOutput, Error> {
     let v: Value = serde_json::from_slice(body)
-        .map_err(|e| Error::Protocol(format!("images response: {e}")))?;
+        .map_err(|e| Error::UpstreamProtocol(format!("images response: {e}")))?;
     if let Some(err) = v.get("error") {
         return Err(provider_error(None, err));
     }
     let data = v
         .get("data")
         .and_then(Value::as_array)
-        .ok_or_else(|| Error::Protocol("images response missing data[]".into()))?;
+        .ok_or_else(|| Error::UpstreamProtocol("images response missing data[]".into()))?;
     let mut media = Vec::with_capacity(data.len());
     let mut text = Vec::new();
     for item in data {
@@ -62,7 +62,7 @@ pub fn decode_image_output(body: &[u8]) -> Result<MediaOutput, Error> {
         } else if let Some(url) = item["url"].as_str() {
             media.push(MediaSource::Url(url.to_owned()));
         } else {
-            return Err(Error::Protocol(
+            return Err(Error::UpstreamProtocol(
                 "image item carries neither b64_json nor url".into(),
             ));
         }
@@ -247,7 +247,7 @@ pub fn decode_transcription(body: &[u8]) -> Result<MediaOutput, Error> {
             }
             let text = v["text"]
                 .as_str()
-                .ok_or_else(|| Error::Protocol("transcription response missing text".into()))?
+                .ok_or_else(|| Error::UpstreamProtocol("transcription response missing text".into()))?
                 .to_owned();
             Ok(MediaOutput {
                 media: Vec::new(),

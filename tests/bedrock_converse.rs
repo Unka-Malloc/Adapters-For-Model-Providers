@@ -641,7 +641,7 @@ async fn chat_stream_unknown_event_is_native_and_truncation_errors() {
     )
     .await
     .unwrap_err();
-    assert!(matches!(err, Error::Protocol(_)));
+    assert!(matches!(err, Error::UpstreamProtocol(_)));
 }
 
 // ---------------------------------------------------------------------------

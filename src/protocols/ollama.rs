@@ -206,7 +206,7 @@ fn encode_tools(tools: &[ToolDef]) -> Value {
 /// Decode a buffered `/api/chat` response (`"done": true`).
 pub fn decode_response(body: &[u8]) -> Result<Output, Error> {
     let v: Value = serde_json::from_slice(body)
-        .map_err(|e| Error::Protocol(format!("ollama chat response: {e}")))?;
+        .map_err(|e| Error::UpstreamProtocol(format!("ollama chat response: {e}")))?;
     if v["error"].is_string() {
         return Err(provider_error(None, &v));
     }
@@ -351,18 +351,18 @@ pub fn build_embed_request(req: &EmbedRequest) -> Result<Value, Error> {
 /// Decode a `/api/embed` response.
 pub fn decode_embed(body: &[u8]) -> Result<EmbedOutput, Error> {
     let v: Value = serde_json::from_slice(body)
-        .map_err(|e| Error::Protocol(format!("ollama embed response: {e}")))?;
+        .map_err(|e| Error::UpstreamProtocol(format!("ollama embed response: {e}")))?;
     if v["error"].is_string() {
         return Err(provider_error(None, &v));
     }
     let rows = v["embeddings"]
         .as_array()
-        .ok_or_else(|| Error::Protocol("embed response has no embeddings".into()))?;
+        .ok_or_else(|| Error::UpstreamProtocol("embed response has no embeddings".into()))?;
     let mut embeddings = Vec::with_capacity(rows.len());
     for row in rows {
         let row = row
             .as_array()
-            .ok_or_else(|| Error::Protocol("embedding row is not an array".into()))?;
+            .ok_or_else(|| Error::UpstreamProtocol("embedding row is not an array".into()))?;
         embeddings.push(row.iter().map(|n| n.as_f64().unwrap_or(0.0) as f32).collect());
     }
     let usage = usage_from(&v);
@@ -399,11 +399,11 @@ pub fn decode_embed(body: &[u8]) -> Result<EmbedOutput, Error> {
 /// (size, digest, families, …) rides `extensions` verbatim.
 pub fn decode_models(body: &[u8]) -> Result<Vec<ModelInfo>, Error> {
     let v: Value = serde_json::from_slice(body)
-        .map_err(|e| Error::Protocol(format!("ollama tags response is not JSON: {e}")))?;
+        .map_err(|e| Error::UpstreamProtocol(format!("ollama tags response is not JSON: {e}")))?;
     let models = v
         .get("models")
         .and_then(Value::as_array)
-        .ok_or_else(|| Error::Protocol("tags response missing models[]".into()))?;
+        .ok_or_else(|| Error::UpstreamProtocol("tags response missing models[]".into()))?;
     models
         .iter()
         .map(|m| {
@@ -411,7 +411,7 @@ pub fn decode_models(body: &[u8]) -> Result<Vec<ModelInfo>, Error> {
                 .get("name")
                 .or_else(|| m.get("model"))
                 .and_then(Value::as_str)
-                .ok_or_else(|| Error::Protocol("model entry missing name".into()))?
+                .ok_or_else(|| Error::UpstreamProtocol("model entry missing name".into()))?
                 .to_owned();
             let mut extensions = m.as_object().cloned().unwrap_or_default();
             extensions.remove("name");
@@ -621,7 +621,7 @@ impl ChatStreamDecoder {
 impl NdjsonEventDecoder for ChatStreamDecoder {
     fn decode(&mut self, line: &str) -> Result<Vec<StreamEvent>, Error> {
         let v: Value = serde_json::from_str(line)
-            .map_err(|e| Error::Protocol(format!("ollama stream line: {e}")))?;
+            .map_err(|e| Error::UpstreamProtocol(format!("ollama stream line: {e}")))?;
         if v["error"].is_string() {
             return Err(provider_error(None, &v));
         }

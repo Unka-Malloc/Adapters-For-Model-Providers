@@ -445,7 +445,7 @@ impl ClientProtocol for JsonLinesProtocol {
             Ok(v) => v,
             Err(e) => {
                 if trimmed[0] == b'{' || trimmed[0] == b'[' {
-                    return Err(Error::Protocol(format!("malformed JSON line: {e}")));
+                    return Err(Error::UpstreamProtocol(format!("malformed JSON line: {e}")));
                 }
                 return Ok(());
             }

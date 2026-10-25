@@ -54,7 +54,7 @@ pub(crate) fn base64_decode(s: &str) -> Result<bytes::Bytes, crate::api::Error> 
             continue;
         }
         let v = value(b)
-            .ok_or_else(|| crate::api::Error::Protocol("invalid base64 payload".into()))?;
+            .ok_or_else(|| crate::api::Error::UpstreamProtocol("invalid base64 payload".into()))?;
         acc = (acc << 6) | v;
         bits += 6;
         if bits >= 8 {

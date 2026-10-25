@@ -311,7 +311,7 @@ fn encode_tool_choice(choice: &ToolChoice, parallel: Option<bool>) -> Value {
 /// Decode a buffered Messages response.
 pub fn decode_response(body: &[u8]) -> Result<Output, Error> {
     let v: Value = serde_json::from_slice(body)
-        .map_err(|e| Error::Protocol(format!("messages response: {e}")))?;
+        .map_err(|e| Error::UpstreamProtocol(format!("messages response: {e}")))?;
     if let Some(err) = v.get("error").filter(|e| e.is_object()) {
         return Err(provider_error(None, err));
     }
@@ -479,7 +479,7 @@ impl crate::transport::SseEventDecoder for MessagesStreamDecoder {
             return Ok(Vec::new());
         }
         let v: Value = serde_json::from_str(&event.data)
-            .map_err(|e| Error::Protocol(format!("messages event: {e}")))?;
+            .map_err(|e| Error::UpstreamProtocol(format!("messages event: {e}")))?;
         let ty = event
             .event
             .as_deref()

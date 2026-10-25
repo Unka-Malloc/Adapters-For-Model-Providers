@@ -110,7 +110,7 @@ async fn github_post_form(
         .into();
     let res = transport.send(req, ctrl).await?;
     serde_json::from_slice(&res.body)
-        .map_err(|e| Error::Protocol(format!("token endpoint returned non-JSON: {e}")))
+        .map_err(|e| Error::UpstreamProtocol(format!("token endpoint returned non-JSON: {e}")))
 }
 
 /// Map an OAuth error payload: polling states return `None` so the
@@ -138,7 +138,7 @@ fn github_decode_token(body: &Value) -> Result<OAuthToken, Error> {
     let access = body
         .get("access_token")
         .and_then(Value::as_str)
-        .ok_or_else(|| Error::Protocol("token response missing access_token".into()))?;
+        .ok_or_else(|| Error::UpstreamProtocol("token response missing access_token".into()))?;
     let expires_at = body
         .get("expires_in")
         .and_then(Value::as_u64)
@@ -186,10 +186,10 @@ async fn github_device_authorize(
         body.get(k)
             .and_then(Value::as_str)
             .map(str::to_owned)
-            .ok_or_else(|| Error::Protocol(format!("device grant missing {k}")))
+            .ok_or_else(|| Error::UpstreamProtocol(format!("device grant missing {k}")))
     };
     let parse_url = |s: &str| -> Result<url::Url, Error> {
-        url::Url::parse(s).map_err(|e| Error::Protocol(format!("bad verification URI: {e}")))
+        url::Url::parse(s).map_err(|e| Error::UpstreamProtocol(format!("bad verification URI: {e}")))
     };
     Ok(DeviceGrant {
         device_code: get_str("device_code")?,
@@ -309,15 +309,15 @@ pub async fn copilot_session(
         });
     }
     let body: Value = serde_json::from_slice(&res.body)
-        .map_err(|e| Error::Protocol(format!("copilot session response is not JSON: {e}")))?;
+        .map_err(|e| Error::UpstreamProtocol(format!("copilot session response is not JSON: {e}")))?;
     let token = body
         .get("token")
         .and_then(Value::as_str)
-        .ok_or_else(|| Error::Protocol("copilot session response missing token".into()))?;
+        .ok_or_else(|| Error::UpstreamProtocol("copilot session response missing token".into()))?;
     let expires_at = body
         .get("expires_at")
         .and_then(Value::as_u64)
-        .ok_or_else(|| Error::Protocol("copilot session response missing expires_at".into()))?;
+        .ok_or_else(|| Error::UpstreamProtocol("copilot session response missing expires_at".into()))?;
     Ok(CopilotToken {
         token: Secret::new(token),
         expires_at: UNIX_EPOCH + Duration::from_secs(expires_at),
@@ -425,7 +425,7 @@ pub fn codex_account_id(token: &OAuthToken) -> Result<String, Error> {
             }
         }
     }
-    Err(Error::Protocol(
+    Err(Error::UpstreamProtocol(
         "codex token carries no chatgpt_account_id claim".into(),
     ))
 }

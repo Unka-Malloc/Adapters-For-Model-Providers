@@ -82,8 +82,8 @@ let client = Client::new(
     Catalog::with_builtin_profiles(),
     Arc::new(ReqwestTransport::new()),
     resolver,          // your CredentialResolver impl
-    effects,           // your EffectHost impl
-);
+)
+.with_effects(effects); // your EffectHost impl
 
 // Any catalog provider, alias, or explicit target.
 let adapter = client.bind_provider(
@@ -96,7 +96,7 @@ let adapter = client.bind_provider(
 let output = adapter.chat(
     ChatRequest::new("claude-sonnet-4-5")
         .message(Message::user("Hello")),
-    &RequestControl::new(),
+    &RequestControl::default(),
 ).await?;
 # Ok(())
 # }

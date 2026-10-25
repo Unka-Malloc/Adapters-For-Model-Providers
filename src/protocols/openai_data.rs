@@ -29,7 +29,7 @@ pub(crate) fn unclaimed(v: &Value, claimed: &[&str]) -> Map<String, Value> {
 
 fn parse_body(body: &[u8], what: &str) -> Result<Value, Error> {
     let v: Value = serde_json::from_slice(body)
-        .map_err(|e| Error::Protocol(format!("{what} response: {e}")))?;
+        .map_err(|e| Error::UpstreamProtocol(format!("{what} response: {e}")))?;
     if let Some(err) = v.get("error") {
         return Err(provider_error(None, err));
     }
@@ -82,7 +82,7 @@ pub fn decode_embed_output(body: &[u8]) -> Result<EmbedOutput, Error> {
     let data = v
         .get("data")
         .and_then(Value::as_array)
-        .ok_or_else(|| Error::Protocol("embeddings response missing data[]".into()))?;
+        .ok_or_else(|| Error::UpstreamProtocol("embeddings response missing data[]".into()))?;
     let mut rows = Vec::with_capacity(data.len());
     for (position, item) in data.iter().enumerate() {
         let index = item["index"].as_u64().unwrap_or(position as u64);
@@ -105,13 +105,13 @@ fn decode_embedding(v: &Value) -> Result<Vec<f32>, Error> {
             .map(|n| {
                 n.as_f64()
                     .map(|f| f as f32)
-                    .ok_or_else(|| Error::Protocol("embedding entry is not a number".into()))
+                    .ok_or_else(|| Error::UpstreamProtocol("embedding entry is not a number".into()))
             })
             .collect(),
         Value::String(s) => {
             let bytes = base64_decode(s)?;
             if bytes.len() % 4 != 0 {
-                return Err(Error::Protocol(
+                return Err(Error::UpstreamProtocol(
                     "base64 embedding is not f32-aligned".into(),
                 ));
             }
@@ -120,7 +120,7 @@ fn decode_embedding(v: &Value) -> Result<Vec<f32>, Error> {
                 .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect())
         }
-        _ => Err(Error::Protocol(
+        _ => Err(Error::UpstreamProtocol(
             "embedding row is neither a number array nor base64".into(),
         )),
     }
@@ -157,7 +157,7 @@ pub fn decode_moderate_output(body: &[u8]) -> Result<ModerateOutput, Error> {
     let results = v
         .get("results")
         .and_then(Value::as_array)
-        .ok_or_else(|| Error::Protocol("moderations response missing results[]".into()))?;
+        .ok_or_else(|| Error::UpstreamProtocol("moderations response missing results[]".into()))?;
     let mut out = Vec::with_capacity(results.len());
     for r in results {
         let mut names = BTreeSet::new();
@@ -216,7 +216,7 @@ pub fn decode_file_id(body: &[u8]) -> Result<String, Error> {
     v.get("id")
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .ok_or_else(|| Error::Protocol("file upload response missing id".into()))
+        .ok_or_else(|| Error::UpstreamProtocol("file upload response missing id".into()))
 }
 
 /// Batch status snapshot from `POST /batches` or `GET /batches/{id}`.
@@ -264,7 +264,7 @@ pub fn decode_jsonl(body: &[u8]) -> Result<Vec<Value>, Error> {
         }
         out.push(
             serde_json::from_str(text)
-                .map_err(|e| Error::Protocol(format!("jsonl line {}: {e}", n + 1)))?,
+                .map_err(|e| Error::UpstreamProtocol(format!("jsonl line {}: {e}", n + 1)))?,
         );
     }
     Ok(out)

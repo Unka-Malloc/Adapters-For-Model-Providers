@@ -157,7 +157,7 @@ fn decode_image_output_roundtrips_predictions() {
 fn decode_image_output_rejects_missing_bytes() {
     let body = json!({"predictions": [{"mimeType": "image/png"}]});
     match gemini_media_codec::decode_image_output(&serde_json::to_vec(&body).unwrap()) {
-        Err(Error::Protocol(m)) => assert!(m.contains("bytesBase64Encoded"), "{m}"),
+        Err(Error::UpstreamProtocol(m)) => assert!(m.contains("bytesBase64Encoded"), "{m}"),
         other => panic!("expected protocol error, got {other:?}"),
     }
 }
