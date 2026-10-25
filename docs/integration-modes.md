@@ -9,25 +9,30 @@ surface, so there is no sidecar mode.
 
 ```toml
 [dependencies]
-a4mp = "0.1"               # default-features = false keeps it runtime-free
+a4mp = "0.2"               # default-features = false drops the reqwest transport
 ```
 
 ```rust
 // Canonical middle: decode the client's dialect, build the upstream's.
-let request = a4mp::wire::decode_chat_request(dialect, &body)?;
-let upstream_body = a4mp::protocols::anthropic::build_request(&request)?;
-let output = a4mp::protocols::anthropic::decode_response(&resp_body)?;
-let client_body = a4mp::wire::encode_chat_output(dialect, &output)?;
+let (request, decode_report) = a4mp::wire::decode_chat_request(dialect, &body)?;
+let upstream_body = a4mp::protocols::anthropic_messages::build_request(&request)?;
+let output = a4mp::protocols::anthropic_messages::decode_response(&resp_body)?;
+let (client_body, encode_report) =
+    a4mp::wire::encode_chat_output(dialect, &output, &request.model);
 
 // Streaming: upstream decoder → canonical StreamEvent → client encoder.
-let event = decoder.decode(&sse_event)?;        // → StreamEvent
-let out = encoder.encode(&event)?;              // → client SSE frame
+let events: Vec<a4mp::StreamEvent> = upstream_decoder.decode(&sse_event)?;
+let mut client_encoder = a4mp::wire::stream_encoder(dialect, &request.model);
+for event in &events {
+    let frames = client_encoder.encode(event);   // → client SSE frames
+}
 ```
 
 Layers, top to bottom (depend only on what you use):
 
 - `wire` — client-facing dialect codecs (OpenAI-Chat, OpenAI Responses,
-  Anthropic); `default-features = false` ships codec-only, no HTTP runtime.
+  Anthropic); `default-features = false` drops the HTTP client, while
+  `RequestControl` still links tokio-util's cancellation token.
 - `protocols` — upstream provider request builders + response/stream
   decoders for Chat, Responses and Anthropic.
 - `transport` + `credentials` — optional async adapter layer (`Adapter`,

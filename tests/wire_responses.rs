@@ -591,3 +591,19 @@ fn native_responses_frames_round_trip_through_canonical() {
     let got: Vec<String> = back.iter().map(summarize).collect();
     assert_eq!(got, want);
 }
+
+#[test]
+fn stop_is_preserved_and_reported_once() {
+    let (req, report) = decode(&json!({
+        "model": "m",
+        "input": "hi",
+        "stop": ["END"]
+    }));
+    // Responses has no stop field, so it stays dialect-bound in extensions.
+    assert_eq!(req.extensions["stop"], json!(["END"]));
+    let repeated = loss_paths(&report)
+        .iter()
+        .filter(|p| p.as_str() == "request.stop")
+        .count();
+    assert_eq!(repeated, 1, "losses: {:?}", loss_paths(&report));
+}

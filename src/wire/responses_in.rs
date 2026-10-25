@@ -95,6 +95,7 @@ pub fn decode_request(body: &[u8]) -> Result<(ChatRequest, ConversionReport), Er
         "temperature",
         "top_p",
         "max_output_tokens",
+        "stop",
         "stream",
     ];
     for (k, val) in obj {
@@ -337,7 +338,7 @@ fn decode_content_part(
                         .get("image_url")
                         .and_then(Value::as_str)
                         .unwrap_or_default();
-                    parse_data_uri(path, url)?
+                    parse_media_source(path, url)?
                 }
             };
             Ok(Some(ContentPart::Media {
@@ -352,7 +353,7 @@ fn decode_content_part(
             } else if let Some(url) = obj.get("file_url").and_then(Value::as_str) {
                 MediaSource::Url(url.to_owned())
             } else if let Some(data) = obj.get("file_data").and_then(Value::as_str) {
-                parse_data_uri(path, data)?
+                parse_media_source(path, data)?
             } else {
                 loss(report, LossKind::Unsupported, path.to_owned());
                 return Ok(None);
@@ -393,29 +394,6 @@ fn decode_content_part(
         None => {
             loss(report, LossKind::Unsupported, path.to_owned());
             Ok(None)
-        }
-    }
-}
-
-/// A `data:` URI or a remote URL.
-fn parse_data_uri(path: &str, url: &str) -> Result<MediaSource, Error> {
-    match url.strip_prefix("data:") {
-        None => Ok(MediaSource::Url(url.to_owned())),
-        Some(rest) => {
-            let (meta, data) = rest
-                .split_once(',')
-                .ok_or_else(|| Error::Protocol(format!("{path}: malformed data URI")))?;
-            let media_type = meta.strip_suffix(";base64").ok_or_else(|| {
-                Error::Protocol(format!("{path}: data URI is not base64-encoded"))
-            })?;
-            Ok(MediaSource::Inline {
-                media_type: if media_type.is_empty() {
-                    "application/octet-stream".into()
-                } else {
-                    media_type.to_owned()
-                },
-                data: base64_decode(data, path)?,
-            })
         }
     }
 }
@@ -1101,28 +1079,4 @@ fn native_part_kind(ty: &str) -> PartKind {
         "function_call" => PartKind::ToolCall,
         _ => PartKind::Other,
     }
-}
-
-// ---------------------------------------------------------------------------
-// Event decoder additions
-// ---------------------------------------------------------------------------
-
-/// Event types that carry no canonical output: envelopes, content-part
-/// announcements and done-mirrors of data already delivered as deltas.
-pub(crate) fn is_structural_event(ty: &str) -> bool {
-    matches!(
-        ty,
-        "response.created"
-            | "response.in_progress"
-            | "response.queued"
-            | "response.content_part.added"
-            | "response.content_part.done"
-            | "response.output_text.done"
-            | "response.function_call_arguments.done"
-            | "response.reasoning_summary_part.added"
-            | "response.reasoning_summary_part.done"
-            | "response.reasoning_summary_text.done"
-            | "response.reasoning_text.done"
-            | "response.refusal.done"
-    )
 }

@@ -260,7 +260,8 @@ fn sse_decoder_handles_crlf_and_split_frames() {
     // Multi-line data joins with newline.
     let ev = dec.feed(b"data: x\ndata: y\n\n").pop().unwrap();
     assert_eq!(ev.data, "x\ny");
-    // Trailing unterminated frame flushes on finish.
-    let ev = dec.finish().pop();
-    assert!(ev.is_none() || ev.unwrap().data.is_empty() || true);
+    // A trailing unterminated frame flushes on finish.
+    assert!(dec.feed(b"data: tail").is_empty());
+    let ev = dec.finish().pop().unwrap();
+    assert_eq!(ev.data, "tail");
 }

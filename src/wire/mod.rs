@@ -15,7 +15,7 @@
 
 mod anthropic_in;
 mod openai_in;
-pub(crate) mod responses_in;
+mod responses_in;
 
 use serde_json::{Map, Value};
 
@@ -304,6 +304,32 @@ pub(crate) fn base64_decode(data: &str, path: &str) -> Result<bytes::Bytes, Erro
         .decode(data)
         .map(bytes::Bytes::from)
         .map_err(|e| Error::Protocol(format!("{path}: invalid base64: {e}")))
+}
+
+/// A `data:` URI or a remote URL, the shape media source fields use on
+/// both OpenAI dialects.
+pub(crate) fn parse_media_source(path: &str, url: &str) -> Result<MediaSource, Error> {
+    match url.strip_prefix("data:") {
+        None => Ok(MediaSource::Url(url.to_owned())),
+        Some(rest) => {
+            let (meta, data) = rest
+                .split_once(',')
+                .ok_or_else(|| Error::Protocol(format!("{path}: malformed data URI")))?;
+            let media_type = meta
+                .strip_suffix(";base64")
+                .ok_or_else(|| {
+                    Error::Protocol(format!("{path}: data URI is not base64-encoded"))
+                })?;
+            Ok(MediaSource::Inline {
+                media_type: if media_type.is_empty() {
+                    "application/octet-stream".into()
+                } else {
+                    media_type.to_owned()
+                },
+                data: base64_decode(data, path)?,
+            })
+        }
+    }
 }
 
 /// A dialect-prefixed random identifier (`chatcmpl-…`, `msg_…`).

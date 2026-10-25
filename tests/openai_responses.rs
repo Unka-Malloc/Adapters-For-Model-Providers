@@ -193,3 +193,139 @@ async fn responses_stream_decodes_named_events() {
     assert!(usage);
     assert!(finish);
 }
+
+fn frame(event: &str, data: serde_json::Value) -> a4mp::SseEvent {
+    a4mp::SseEvent {
+        event: Some(event.to_owned()),
+        data: data.to_string(),
+        id: None,
+    }
+}
+
+fn decode_frames(frames: &[a4mp::SseEvent]) -> Vec<StreamEvent> {
+    let mut decoder =
+        a4mp::protocols::openai_responses::ResponsesStreamDecoder::new();
+    let mut events = Vec::new();
+    for f in frames {
+        events.extend(decoder.decode(f).unwrap());
+    }
+    events
+}
+
+#[test]
+fn stream_done_only_text_frames_backfill_missing_deltas() {
+    let frames = vec![
+        frame(
+            "response.output_item.added",
+            json!({"output_index": 0, "item": {"type": "message", "id": "msg_1"}}),
+        ),
+        frame(
+            "response.output_text.done",
+            json!({"output_index": 0, "text": "complete-only"}),
+        ),
+        frame(
+            "response.output_item.done",
+            json!({"output_index": 0, "item": {"type": "message", "content": [
+                {"type": "output_text", "text": "complete-only"}
+            ]}}),
+        ),
+        frame(
+            "response.completed",
+            json!({"response": {"status": "completed"}}),
+        ),
+    ];
+    let events = decode_frames(&frames);
+    let text: String = events
+        .iter()
+        .filter_map(|e| match e {
+            StreamEvent::TextDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "complete-only");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::TextDelta { .. }))
+            .count(),
+        1
+    );
+    assert!(events.iter().any(|e| matches!(e, StreamEvent::PartFinished { .. })));
+    assert!(events.iter().any(|e| matches!(e, StreamEvent::Finished { .. })));
+    // Envelopes and done events are consumed, not leaked as Native.
+    assert!(!events.iter().any(|e| matches!(e, StreamEvent::Native { .. })));
+}
+
+#[test]
+fn stream_done_only_tool_arguments_are_preserved() {
+    let frames = vec![
+        frame(
+            "response.output_item.added",
+            json!({"output_index": 0, "item": {
+                "type": "function_call", "call_id": "call_9", "name": "f"}}),
+        ),
+        frame(
+            "response.function_call_arguments.done",
+            json!({"output_index": 0, "arguments": "{\"x\":1}"}),
+        ),
+        frame(
+            "response.output_item.done",
+            json!({"output_index": 0, "item": {
+                "type": "function_call", "call_id": "call_9", "name": "f",
+                "arguments": "{\"x\":1}"}}),
+        ),
+        frame(
+            "response.completed",
+            json!({"response": {"status": "completed"}}),
+        ),
+    ];
+    let events = decode_frames(&frames);
+    let args: String = events
+        .iter()
+        .filter_map(|e| match e {
+            StreamEvent::ToolCallDelta { arguments, .. } => Some(arguments.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(args, "{\"x\":1}");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::ToolCallStarted { .. }))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn stream_done_only_refusal_text_is_preserved() {
+    let frames = vec![
+        frame(
+            "response.output_item.added",
+            json!({"output_index": 0, "item": {"type": "message", "id": "msg_1"}}),
+        ),
+        frame(
+            "response.refusal.done",
+            json!({"output_index": 0, "refusal": "cannot help"}),
+        ),
+        frame(
+            "response.output_item.done",
+            json!({"output_index": 0, "item": {"type": "message", "content": [
+                {"type": "refusal", "refusal": "cannot help"}
+            ]}}),
+        ),
+        frame(
+            "response.completed",
+            json!({"response": {"status": "completed"}}),
+        ),
+    ];
+    let events = decode_frames(&frames);
+    let text: String = events
+        .iter()
+        .filter_map(|e| match e {
+            StreamEvent::TextDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "cannot help");
+}

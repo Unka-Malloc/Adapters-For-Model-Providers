@@ -3,7 +3,7 @@
 //!
 //! Pure functions and a stateful stream decoder; no transport here.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::{Map, Value, json};
 
@@ -323,6 +323,13 @@ fn decode_usage_responses(u: &Value) -> Usage {
 pub struct ResponsesStreamDecoder {
     parts: HashMap<u64, u32>,
     next_part: u32,
+    /// Parts that already received incremental deltas. Terminal `.done`
+    /// events only backfill a part when no deltas were observed.
+    text_seen: HashSet<u32>,
+    reasoning_seen: HashSet<u32>,
+    args_seen: HashSet<u32>,
+    /// Tool parts whose identity (`ToolCallStarted`) was already emitted.
+    tools_started: HashSet<u32>,
 }
 
 impl ResponsesStreamDecoder {
@@ -341,6 +348,50 @@ impl ResponsesStreamDecoder {
             }
         }
     }
+
+    /// Existing part for a wire index, or a newly announced one.
+    fn part_or_start(
+        &mut self,
+        wire_index: u64,
+        kind: PartKind,
+        out: &mut Vec<StreamEvent>,
+    ) -> u32 {
+        let (part, started) = self.part(wire_index, kind);
+        if let Some(ev) = started {
+            out.push(ev);
+        }
+        part
+    }
+
+    /// Backfill text from a `.done`/item payload when no delta arrived.
+    fn text_fallback(&mut self, part: u32, text: &str, out: &mut Vec<StreamEvent>) {
+        if !text.is_empty() && self.text_seen.insert(part) {
+            out.push(StreamEvent::TextDelta {
+                index: part,
+                text: text.to_owned(),
+            });
+        }
+    }
+
+    /// Backfill reasoning text when no delta arrived.
+    fn reasoning_fallback(&mut self, part: u32, text: &str, out: &mut Vec<StreamEvent>) {
+        if !text.is_empty() && self.reasoning_seen.insert(part) {
+            out.push(StreamEvent::ReasoningDelta {
+                index: part,
+                text: text.to_owned(),
+            });
+        }
+    }
+
+    /// Backfill tool arguments when no delta arrived.
+    fn args_fallback(&mut self, part: u32, args: &str, out: &mut Vec<StreamEvent>) {
+        if !args.is_empty() && self.args_seen.insert(part) {
+            out.push(StreamEvent::ToolCallDelta {
+                index: part,
+                arguments: args.to_owned(),
+            });
+        }
+    }
 }
 
 impl crate::transport::SseEventDecoder for ResponsesStreamDecoder {
@@ -355,12 +406,16 @@ impl crate::transport::SseEventDecoder for ResponsesStreamDecoder {
             .as_deref()
             .or_else(|| v["type"].as_str())
             .unwrap_or_default();
-        // Envelopes and done-mirrors carry no new canonical output.
-        if crate::wire::responses_in::is_structural_event(ty) {
-            return Ok(Vec::new());
-        }
         let mut out = Vec::new();
         match ty {
+            // Envelopes and content-part announcements carry no new output.
+            "response.created"
+            | "response.in_progress"
+            | "response.queued"
+            | "response.content_part.added"
+            | "response.content_part.done"
+            | "response.reasoning_summary_part.added"
+            | "response.reasoning_summary_part.done" => {}
             "response.output_item.added" => {
                 let idx = v["output_index"].as_u64().unwrap_or(0);
                 let kind = match v["item"]["type"].as_str() {
@@ -374,61 +429,159 @@ impl crate::transport::SseEventDecoder for ResponsesStreamDecoder {
                     out.push(ev);
                 }
                 if let (PartKind::ToolCall, Some(item)) = (kind, v.get("item")) {
+                    self.tools_started.insert(part);
                     out.push(StreamEvent::ToolCallStarted {
                         index: part,
-                        id: item["call_id"].as_str().or(item["id"].as_str()).unwrap_or_default().to_owned(),
+                        id: item["call_id"]
+                            .as_str()
+                            .or(item["id"].as_str())
+                            .unwrap_or_default()
+                            .to_owned(),
                         name: item["name"].as_str().unwrap_or_default().to_owned(),
                     });
                 }
             }
-            "response.output_text.delta" => {
+            "response.output_text.delta" | "response.refusal.delta" => {
                 let idx = v["output_index"].as_u64().unwrap_or(0);
-                let (part, started) = self.part(idx, PartKind::Text);
-                if let Some(ev) = started {
-                    out.push(ev);
-                }
+                let part = self.part_or_start(idx, PartKind::Text, &mut out);
                 if let Some(text) = v["delta"].as_str() {
-                    out.push(StreamEvent::TextDelta { index: part, text: text.to_owned() });
+                    self.text_seen.insert(part);
+                    out.push(StreamEvent::TextDelta {
+                        index: part,
+                        text: text.to_owned(),
+                    });
                 }
             }
-            "response.reasoning_summary_text.delta"
-            | "response.reasoning_text.delta" => {
+            "response.output_text.done" | "response.refusal.done" => {
                 let idx = v["output_index"].as_u64().unwrap_or(0);
-                let (part, started) = self.part(idx, PartKind::Reasoning);
-                if let Some(ev) = started {
-                    out.push(ev);
+                let part = self.part_or_start(idx, PartKind::Text, &mut out);
+                let field = if ty == "response.refusal.done" {
+                    "refusal"
+                } else {
+                    "text"
+                };
+                if let Some(text) = v[field].as_str() {
+                    self.text_fallback(part, text, &mut out);
                 }
+            }
+            "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
+                let idx = v["output_index"].as_u64().unwrap_or(0);
+                let part = self.part_or_start(idx, PartKind::Reasoning, &mut out);
                 if let Some(text) = v["delta"].as_str() {
-                    out.push(StreamEvent::ReasoningDelta { index: part, text: text.to_owned() });
+                    self.reasoning_seen.insert(part);
+                    out.push(StreamEvent::ReasoningDelta {
+                        index: part,
+                        text: text.to_owned(),
+                    });
+                }
+            }
+            "response.reasoning_summary_text.done" | "response.reasoning_text.done" => {
+                let idx = v["output_index"].as_u64().unwrap_or(0);
+                let part = self.part_or_start(idx, PartKind::Reasoning, &mut out);
+                if let Some(text) = v["text"].as_str() {
+                    self.reasoning_fallback(part, text, &mut out);
                 }
             }
             "response.function_call_arguments.delta" => {
                 let idx = v["output_index"].as_u64().unwrap_or(0);
-                let (part, started) = self.part(idx, PartKind::ToolCall);
-                if let Some(ev) = started {
-                    out.push(ev);
-                }
+                let part = self.part_or_start(idx, PartKind::ToolCall, &mut out);
                 if let Some(args) = v["delta"].as_str() {
-                    out.push(StreamEvent::ToolCallDelta { index: part, arguments: args.to_owned() });
+                    self.args_seen.insert(part);
+                    out.push(StreamEvent::ToolCallDelta {
+                        index: part,
+                        arguments: args.to_owned(),
+                    });
+                }
+            }
+            "response.function_call_arguments.done" => {
+                let idx = v["output_index"].as_u64().unwrap_or(0);
+                let part = self.part_or_start(idx, PartKind::ToolCall, &mut out);
+                if let Some(args) = v["arguments"].as_str() {
+                    self.args_fallback(part, args, &mut out);
                 }
             }
             "response.output_item.done" => {
                 let idx = v["output_index"].as_u64().unwrap_or(0);
-                if let Some(part) = self.parts.get(&idx) {
-                    out.push(StreamEvent::PartFinished { index: *part });
-                }
-                // Preserve non-message items as opaque replay state.
-                match v["item"]["type"].as_str() {
-                    Some("reasoning") | Some("function_call") => {}
-                    Some("message") => {}
-                    _ => {
-                        if let Some(part) = self.parts.get(&idx) {
-                            out.push(StreamEvent::Native {
-                                part_index: Some(*part),
-                                value: v["item"].clone(),
+                let item = &v["item"];
+                let kind = match item["type"].as_str() {
+                    Some("function_call") => PartKind::ToolCall,
+                    Some("reasoning") => PartKind::Reasoning,
+                    Some("message") => PartKind::Text,
+                    _ => PartKind::Other,
+                };
+                let part = match self.parts.get(&idx).copied() {
+                    Some(part) => part,
+                    None => self.part_or_start(idx, kind, &mut out),
+                };
+                match item["type"].as_str() {
+                    Some("message") => {
+                        let mut text = String::new();
+                        if let Some(content) = item["content"].as_array() {
+                            for c in content {
+                                match c["type"].as_str() {
+                                    Some("output_text" | "text") => {
+                                        if let Some(t) = c["text"].as_str() {
+                                            text.push_str(t);
+                                        }
+                                    }
+                                    Some("refusal") => {
+                                        if let Some(t) = c["refusal"].as_str() {
+                                            text.push_str(t);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        self.text_fallback(part, &text, &mut out);
+                    }
+                    Some("reasoning") => {
+                        let joined = item["summary"]
+                            .as_array()
+                            .map(|summary| {
+                                summary
+                                    .iter()
+                                    .filter_map(|p| p["text"].as_str())
+                                    .collect::<String>()
+                            })
+                            .unwrap_or_default();
+                        self.reasoning_fallback(part, &joined, &mut out);
+                    }
+                    Some("function_call") => {
+                        // A terminal item may be the only place identity or
+                        // arguments appear (no `added`/delta frames).
+                        if self.tools_started.insert(part) {
+                            out.push(StreamEvent::ToolCallStarted {
+                                index: part,
+                                id: item
+                                    .get("call_id")
+                                    .and_then(Value::as_str)
+                                    .or_else(|| item.get("id").and_then(Value::as_str))
+                                    .unwrap_or_default()
+                                    .to_owned(),
+                                name: item
+                                    .get("name")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_owned(),
                             });
                         }
+                        if let Some(args) = item["arguments"].as_str() {
+                            self.args_fallback(part, args, &mut out);
+                        }
                     }
+                    _ => {}
+                }
+                out.push(StreamEvent::PartFinished { index: part });
+                // Preserve provider-native items (server tools, …) opaque.
+                if !matches!(
+                    item["type"].as_str(),
+                    Some("message" | "reasoning" | "function_call")
+                ) {
+                    out.push(StreamEvent::Native {
+                        part_index: Some(part),
+                        value: item.clone(),
+                    });
                 }
             }
             "response.completed" | "response.incomplete" => {

@@ -267,7 +267,7 @@ fn decode_part(
         Some("image_url") => {
             let image = &obj["image_url"];
             let url = image["url"].as_str().unwrap_or_default();
-            let source = parse_image_source(path, url)?;
+            let source = parse_media_source(path, url)?;
             Ok(Some(ContentPart::Media {
                 kind: MediaKind::Image,
                 source,
@@ -313,32 +313,6 @@ fn decode_part(
         None => {
             loss(report, LossKind::Unsupported, path.to_owned());
             Ok(None)
-        }
-    }
-}
-
-/// `image_url.url` is either a remote URL or a `data:` URI.
-fn parse_image_source(path: &str, url: &str) -> Result<MediaSource, Error> {
-    match url.strip_prefix("data:") {
-        None => Ok(MediaSource::Url(url.to_owned())),
-        Some(rest) => {
-            let (meta, data) = rest
-                .split_once(',')
-                .ok_or_else(|| Error::Protocol(format!("{path}: malformed data URI")))?;
-            let media_type = meta
-                .strip_suffix(";base64")
-                .ok_or_else(|| {
-                    Error::Protocol(format!("{path}: data URI is not base64-encoded"))
-                })?;
-            let media_type = if media_type.is_empty() {
-                "application/octet-stream"
-            } else {
-                media_type
-            };
-            Ok(MediaSource::Inline {
-                media_type: media_type.to_owned(),
-                data: base64_decode(data, path)?,
-            })
         }
     }
 }
