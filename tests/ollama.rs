@@ -244,6 +244,78 @@ async fn chat_response_decodes_object_tool_calls() {
 }
 
 #[tokio::test]
+async fn chat_response_decodes_thinking_into_reasoning() {
+    // Live-verified shape: thinking models (qwen3, deepseek-r1) return
+    // `message.thinking` alongside `message.content`.
+    let t = MockTransport::new();
+    t.push(Response::Json(
+        200,
+        json!({
+            "model": "qwen3",
+            "created_at": "2026-01-01T00:00:00Z",
+            "message": {
+                "role": "assistant",
+                "content": "pong",
+                "thinking": "the user asked to reply exactly"
+            },
+            "done": true,
+            "done_reason": "stop"
+        }),
+    ));
+    let a = adapter(t);
+    let out = a
+        .chat(ChatRequest::default(), &RequestControl::default())
+        .await
+        .unwrap();
+
+    assert_eq!(out.parts.len(), 2);
+    match &out.parts[0] {
+        ContentPart::Reasoning(rb) => {
+            assert_eq!(rb.summary.as_deref(), Some("the user asked to reply exactly"));
+            assert_eq!(rb.opaque["thinking"], "the user asked to reply exactly");
+        }
+        other => panic!("expected reasoning, got {other:?}"),
+    }
+    match &out.parts[1] {
+        ContentPart::Text { text } => assert_eq!(text, "pong"),
+        other => panic!("expected text, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn chat_stream_decodes_thinking_deltas() {
+    const BODY: &str = concat!(
+        r#"{"model":"q","created_at":"t0","message":{"role":"assistant","thinking":"th"},"done":false}"#,
+        "\n",
+        r#"{"model":"q","created_at":"t1","message":{"role":"assistant","content":"ok"},"done":false}"#,
+        "\n",
+        r#"{"model":"q","created_at":"t2","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop"}"#,
+        "\n",
+    );
+    let t = MockTransport::new();
+    t.push(Response::Sse(vec![BODY.into()]));
+    let a = adapter(t);
+    let st = a
+        .chat_stream(ChatRequest::default(), &RequestControl::default())
+        .await
+        .unwrap();
+
+    let kinds = collect(st).await.unwrap();
+    assert!(kinds.iter().any(|e| matches!(
+        e,
+        StreamEvent::PartStarted { kind: PartKind::Reasoning, .. }
+    )));
+    assert!(kinds.iter().any(|e| matches!(
+        e,
+        StreamEvent::ReasoningDelta { text, .. } if text == "th"
+    )));
+    assert!(kinds.iter().any(|e| matches!(
+        e,
+        StreamEvent::TextDelta { text, .. } if text == "ok"
+    )));
+}
+
+#[tokio::test]
 async fn chat_stream_decodes_ndjson_split_mid_line() {
     const L1: &str = r#"{"model":"qwen3","created_at":"t0","message":{"role":"assistant","content":"Hel"},"done":false}"#;
     const L2: &str = r#"{"model":"qwen3","created_at":"t1","message":{"role":"assistant","content":"lo"},"done":false}"#;

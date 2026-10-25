@@ -212,6 +212,15 @@ pub fn decode_response(body: &[u8]) -> Result<Output, Error> {
     }
     let message = &v["message"];
     let mut parts = Vec::new();
+    if let Some(thinking) = message["thinking"].as_str() {
+        if !thinking.is_empty() {
+            parts.push(ContentPart::Reasoning(ReasoningBlock {
+                protocol: Protocol::Other("ollama".into()),
+                opaque: json!({ "thinking": thinking }),
+                summary: Some(thinking.to_owned()),
+            }));
+        }
+    }
     if let Some(text) = message["content"].as_str() {
         if !text.is_empty() {
             parts.push(ContentPart::Text {
@@ -599,6 +608,7 @@ impl Stream for NdjsonEventStream {
 pub struct ChatStreamDecoder {
     next_part: u32,
     text_part: Option<u32>,
+    thinking_part: Option<u32>,
     tool_parts: HashMap<u64, u32>,
 }
 
@@ -617,6 +627,27 @@ impl NdjsonEventDecoder for ChatStreamDecoder {
         }
         let mut out = Vec::new();
         let message = &v["message"];
+        if let Some(thinking) = message["thinking"].as_str() {
+            if !thinking.is_empty() {
+                let index = match self.thinking_part {
+                    Some(i) => i,
+                    None => {
+                        let i = self.next_part;
+                        self.next_part += 1;
+                        self.thinking_part = Some(i);
+                        out.push(StreamEvent::PartStarted {
+                            index: i,
+                            kind: PartKind::Reasoning,
+                        });
+                        i
+                    }
+                };
+                out.push(StreamEvent::ReasoningDelta {
+                    index,
+                    text: thinking.to_owned(),
+                });
+            }
+        }
         if let Some(text) = message["content"].as_str() {
             if !text.is_empty() {
                 let index = match self.text_part {
