@@ -84,7 +84,8 @@ pub enum TransportError {
     /// Body decode or I/O failure.
     #[error("io: {0}")]
     Io(String),
-    /// Caller cancellation surfaced through the transport.
+    /// Caller cancellation surfaced through the transport. The request may
+    /// already have been dispatched when cancellation raced it.
     #[error("cancelled")]
     Cancelled,
 }
@@ -93,12 +94,15 @@ impl TransportError {
     /// Whether repeating the request could duplicate billed work.
     ///
     /// `Connect` never reached the provider: safe. Everything else is
-    /// `Unsafe` — mid-body failure may follow upstream acceptance, so
-    /// automatic retries are forbidden; the caller decides explicitly.
+    /// `Unsafe` — cancellation may race a dispatched request, and
+    /// mid-body failure may follow upstream acceptance, so automatic
+    /// retries are forbidden; the caller decides explicitly.
     pub fn retry_safety(&self) -> RetrySafety {
         match self {
-            TransportError::Connect(_) | TransportError::Cancelled => RetrySafety::Safe,
-            TransportError::Disconnected(_) | TransportError::Io(_) => RetrySafety::Unsafe,
+            TransportError::Connect(_) => RetrySafety::Safe,
+            TransportError::Cancelled
+            | TransportError::Disconnected(_)
+            | TransportError::Io(_) => RetrySafety::Unsafe,
         }
     }
 }

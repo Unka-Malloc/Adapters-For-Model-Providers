@@ -3,6 +3,22 @@
 All notable changes to `a4mp` are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-10-25
+
+### Fixed
+
+- `Error::Cancelled`, `Error::Protocol` and `TransportError::Cancelled` now
+  report `RetrySafety::Unsafe`. These failures can surface after a request
+  reached the provider, so an automatic retry could repeat billed input and
+  output work. Connect refusals and local pre-send failures remain `Safe`.
+- `RetrySafety` documentation now matches that boundary.
+
+### Tests
+
+- Contract coverage for cancelled transport errors, `Error::Cancelled` and
+  `Error::Protocol`, plus a real-socket transport test that cancels after
+  the request has been dispatched.
+
 ## [0.3.0] - 2026-10-25
 
 ### Changed

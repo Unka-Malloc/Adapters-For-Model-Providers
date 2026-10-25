@@ -42,6 +42,9 @@ fn retry_safety_classification() {
     // Mid-body disconnect: upstream acceptance uncertain — unsafe.
     let e = Error::Transport(TransportError::Disconnected("closed".into()));
     assert_eq!(e.retry_safety(), RetrySafety::Unsafe);
+    // Cancellation may race a dispatched request — unsafe to replay.
+    let e = Error::Transport(TransportError::Cancelled);
+    assert_eq!(e.retry_safety(), RetrySafety::Unsafe);
     // Provider rejection marked unsafe by the adapter stays unsafe.
     let e = Error::Provider {
         status: Some(500),
@@ -51,9 +54,29 @@ fn retry_safety_classification() {
         raw: None,
     };
     assert_eq!(e.retry_safety(), RetrySafety::Unsafe);
-    // Deterministic failures are safe to repeat.
+    // Local pre-send failures are safe to repeat.
     let e = Error::Unsupported("embed".into());
     assert_eq!(e.retry_safety(), RetrySafety::Safe);
+    let e = Error::Conversion {
+        report: Box::new(ConversionReport {
+            source: Protocol::OpenAiChatCompletions,
+            target: Protocol::AnthropicMessages,
+            losses: vec![],
+        }),
+    };
+    assert_eq!(e.retry_safety(), RetrySafety::Safe);
+    let e = Error::Credential("entropy unavailable".into());
+    assert_eq!(e.retry_safety(), RetrySafety::Safe);
+}
+
+#[test]
+fn post_dispatch_contract_errors_are_unsafe_to_retry() {
+    // Caller cancellation can occur after the request reached the provider.
+    assert_eq!(Error::Cancelled.retry_safety(), RetrySafety::Unsafe);
+    // Protocol violations are discovered after dispatch, so work may have
+    // already been accepted upstream.
+    let e = Error::Protocol("response has no choices".into());
+    assert_eq!(e.retry_safety(), RetrySafety::Unsafe);
 }
 
 #[test]

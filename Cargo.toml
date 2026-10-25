@@ -1,6 +1,6 @@
 [package]
 name = "a4mp"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
@@ -34,4 +34,4 @@ url = "2"
 
 [dev-dependencies]
 futures-util = "0.3"
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "net", "rt", "sync", "time"] }

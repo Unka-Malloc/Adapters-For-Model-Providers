@@ -151,10 +151,12 @@ pub enum OperationKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RetrySafety {
     /// Safe: the provider never accepted the work (connect refused,
-    /// pre-flight rejection, idempotent read).
+    /// local pre-send validation/conversion, explicit rejection, idempotent
+    /// read).
     Safe,
-    /// Upstream acceptance is uncertain: an automatic retry could duplicate
-    /// billed work. Only an explicit caller decision may repeat it.
+    /// Upstream acceptance is uncertain or confirmed: an automatic retry
+    /// could duplicate billed work. Only an explicit caller decision may
+    /// repeat it.
     Unsafe,
 }
 
@@ -717,24 +719,36 @@ pub enum Error {
     #[error("credentials: {0}")]
     Credential(String),
 
-    /// The upstream payload violated the protocol contract.
+    /// The upstream payload violated the protocol contract. Violations are
+    /// observed after the request was dispatched, so upstream work may
+    /// already have been accepted.
     #[error("protocol violation: {0}")]
     Protocol(String),
 
-    /// Caller cancellation via `RequestControl::cancel`.
+    /// Caller cancellation via `RequestControl::cancel`. Cancellation can
+    /// race a request that has already reached the provider, so the
+    /// upstream outcome is unknown.
     #[error("cancelled")]
     Cancelled,
 }
 
 impl Error {
     /// Whether an automatic retry is safe for this failure.
+    ///
+    /// Only failures that provably occurred before dispatch are `Safe`:
+    /// connect refusal, local conversion/validation, unsupported
+    /// operations and credential generation. Cancellation, protocol
+    /// violations and mid-flight transport failures may follow upstream
+    /// acceptance, so repeating them could duplicate billed work.
     pub fn retry_safety(&self) -> RetrySafety {
         match self {
             Error::Transport(e) => e.retry_safety(),
             Error::Provider { retry, .. } => *retry,
-            Error::Cancelled | Error::Unsupported(_) => RetrySafety::Safe,
-            // Conversion, credentials and protocol violations are deterministic.
-            Error::Conversion { .. } | Error::Credential(_) | Error::Protocol(_) => RetrySafety::Safe,
+            Error::Unsupported(_) => RetrySafety::Safe,
+            // Local, pre-send failures.
+            Error::Conversion { .. } | Error::Credential(_) => RetrySafety::Safe,
+            // Post-dispatch failures: upstream acceptance cannot be ruled out.
+            Error::Cancelled | Error::Protocol(_) => RetrySafety::Unsafe,
         }
     }
 }
