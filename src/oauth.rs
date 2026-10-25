@@ -76,19 +76,29 @@ pub struct DeviceGrant {
     pub raw: Value,
 }
 
-fn random_url_safe(bytes: usize) -> String {
+/// Fill `bytes` from `rng` and encode them URL-safe.
+///
+/// Entropy failure is returned, never panicked on: a caller that cannot
+/// obtain random bytes must not fall back to a weaker verifier or state.
+fn random_url_safe<R: TryRngCore>(rng: &mut R, bytes: usize) -> Result<String, Error> {
     let mut buf = vec![0u8; bytes];
-    rand::rngs::OsRng
-        .try_fill_bytes(&mut buf)
-        .expect("OsRng is infallible");
-    URL_SAFE_NO_PAD.encode(buf)
+    rng.try_fill_bytes(&mut buf)
+        .map_err(|e| Error::Credential(format!("OS entropy source failed: {e}")))?;
+    Ok(URL_SAFE_NO_PAD.encode(buf))
 }
 
 /// A PKCE verifier (keep secret) and its S256 challenge.
-pub fn pkce() -> (Secret, String) {
-    let verifier = random_url_safe(48);
+///
+/// Returns [`Error::Credential`] when the OS entropy source cannot supply
+/// bytes; no verifier is produced in that case.
+pub fn pkce() -> Result<(Secret, String), Error> {
+    pkce_with(&mut rand::rngs::OsRng)
+}
+
+fn pkce_with<R: TryRngCore>(rng: &mut R) -> Result<(Secret, String), Error> {
+    let verifier = random_url_safe(rng, 48)?;
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-    (Secret::new(verifier), challenge)
+    Ok((Secret::new(verifier), challenge))
 }
 
 /// Build the authorization URL for the code flow.
@@ -301,17 +311,31 @@ pub async fn device_flow(
 }
 
 /// Complete authorization-code + PKCE flow through the interaction port.
+///
+/// Entropy failure is returned as [`Error::Credential`] before an
+/// authorization URL is presented.
 pub async fn code_flow(
     client: &OAuthClient,
     transport: &dyn Transport,
     effects: &dyn EffectHost,
     ctrl: &RequestControl,
 ) -> Result<OAuthToken, Error> {
+    let mut rng = rand::rngs::OsRng;
+    code_flow_with_rng(client, transport, effects, ctrl, &mut rng).await
+}
+
+async fn code_flow_with_rng<R: TryRngCore>(
+    client: &OAuthClient,
+    transport: &dyn Transport,
+    effects: &dyn EffectHost,
+    ctrl: &RequestControl,
+    rng: &mut R,
+) -> Result<OAuthToken, Error> {
     let redirect = effects.redirect_uri().ok_or_else(|| {
         Error::Unsupported("host cannot capture auth callbacks".into())
     })?;
-    let (verifier, challenge) = pkce();
-    let state = random_url_safe(24);
+    let (verifier, challenge) = pkce_with(&mut *rng)?;
+    let state = random_url_safe(&mut *rng, 24)?;
     let url = authorize_url(client, &redirect, &state, &challenge)?;
     effects.present_url(&url, ctrl).await?;
     let callback = effects.await_callback(ctrl).await?;
@@ -379,4 +403,168 @@ pub async fn refresh(
         new_token.refresh_token = token.refresh_token.clone();
     }
     Ok(new_token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transport::{HttpResponse, StreamingResponse, TransportError};
+
+    #[derive(Debug)]
+    struct EntropyUnavailable;
+
+    impl std::fmt::Display for EntropyUnavailable {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("simulated OS entropy failure")
+        }
+    }
+
+    impl std::error::Error for EntropyUnavailable {}
+
+    struct FailingRng;
+
+    impl rand::TryRngCore for FailingRng {
+        type Error = EntropyUnavailable;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Err(EntropyUnavailable)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Err(EntropyUnavailable)
+        }
+
+        fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
+            Err(EntropyUnavailable)
+        }
+    }
+
+    struct FixedRng;
+
+    impl rand::TryRngCore for FixedRng {
+        type Error = std::convert::Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(0)
+        }
+
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(0)
+        }
+
+        fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+            dst.fill(b'a');
+            Ok(())
+        }
+    }
+
+    struct NoIo;
+
+    #[async_trait::async_trait]
+    impl Transport for NoIo {
+        async fn send(
+            &self,
+            _req: HttpRequest,
+            _ctrl: &RequestControl,
+        ) -> Result<HttpResponse, TransportError> {
+            panic!("transport must not be reached when entropy generation fails")
+        }
+
+        async fn send_stream(
+            &self,
+            _req: HttpRequest,
+            _ctrl: &RequestControl,
+        ) -> Result<StreamingResponse, TransportError> {
+            panic!("transport must not be reached when entropy generation fails")
+        }
+    }
+
+    struct NoEffects;
+
+    #[async_trait::async_trait]
+    impl EffectHost for NoEffects {
+        fn redirect_uri(&self) -> Option<url::Url> {
+            Some(url::Url::parse("http://127.0.0.1:8765/callback").unwrap())
+        }
+
+        async fn present_url(&self, _url: &url::Url, _ctrl: &RequestControl) -> Result<(), Error> {
+            panic!("authorization URL must not be presented when entropy generation fails")
+        }
+
+        async fn await_callback(&self, _ctrl: &RequestControl) -> Result<String, Error> {
+            panic!("callback must not be awaited when entropy generation fails")
+        }
+    }
+
+    fn client() -> OAuthClient {
+        OAuthClient {
+            client_id: "a4mp-test".into(),
+            client_secret: None,
+            authorize_url: Some(url::Url::parse("https://auth.example/authorize").unwrap()),
+            device_url: None,
+            token_url: url::Url::parse("https://auth.example/token").unwrap(),
+            scope: None,
+            authorize_extra: vec![],
+            token_extra: vec![],
+        }
+    }
+
+    fn assert_entropy_failure(err: Error) {
+        match err {
+            Error::Credential(message) => {
+                assert!(
+                    message.contains("entropy"),
+                    "expected an entropy message, got {message}"
+                );
+            }
+            other => panic!("expected Credential entropy error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn random_url_safe_reports_entropy_failure() {
+        let mut rng = FailingRng;
+        match random_url_safe(&mut rng, 32) {
+            Ok(value) => panic!("entropy failure must not produce {value:?}"),
+            Err(err) => assert_entropy_failure(err),
+        }
+    }
+
+    #[test]
+    fn pkce_reports_entropy_failure() {
+        let mut rng = FailingRng;
+        match pkce_with(&mut rng) {
+            Ok(_) => panic!("entropy failure must not produce a verifier"),
+            Err(err) => assert_entropy_failure(err),
+        }
+    }
+
+    #[test]
+    fn pkce_with_derives_s256_challenge() {
+        let mut rng = FixedRng;
+        let (verifier, challenge) = pkce_with(&mut rng).unwrap();
+        let expected_verifier = URL_SAFE_NO_PAD.encode([b'a'; 48]);
+        assert_eq!(verifier.expose(), expected_verifier);
+        assert_eq!(
+            challenge,
+            URL_SAFE_NO_PAD.encode(Sha256::digest(expected_verifier.as_bytes()))
+        );
+    }
+
+    #[tokio::test]
+    async fn code_flow_propagates_entropy_failure() {
+        let mut rng = FailingRng;
+        let result = code_flow_with_rng(
+            &client(),
+            &NoIo,
+            &NoEffects,
+            &RequestControl::default(),
+            &mut rng,
+        )
+        .await;
+        match result {
+            Ok(_) => panic!("entropy failure must not produce a token"),
+            Err(err) => assert_entropy_failure(err),
+        }
+    }
 }

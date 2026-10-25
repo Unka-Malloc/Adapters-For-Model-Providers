@@ -713,7 +713,7 @@ pub enum Error {
     #[error("conversion {report:?}")]
     Conversion { report: Box<ConversionReport> },
 
-    /// Credential resolution failed at the host port.
+    /// Credential generation or resolution failed.
     #[error("credentials: {0}")]
     Credential(String),
 

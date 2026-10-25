@@ -13,7 +13,7 @@ risk to provider integrations.
 
 ```toml
 [dependencies]
-a4mp = { version = "0.2", features = ["reqwest-transport"] }
+a4mp = { version = "0.3", features = ["reqwest-transport"] }
 ```
 
 ## What it is

@@ -9,7 +9,7 @@ surface, so there is no sidecar mode.
 
 ```toml
 [dependencies]
-a4mp = "0.2"               # default-features = false drops the reqwest transport
+a4mp = "0.3"               # default-features = false drops the reqwest transport
 ```
 
 ```rust
