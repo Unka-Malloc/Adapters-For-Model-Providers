@@ -6,6 +6,7 @@
 //! the host's `CredentialResolver`. The library never opens a browser,
 //! binds a listener or stores a token itself.
 
+use std::fmt;
 use std::time::{Duration, SystemTime};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -62,7 +63,11 @@ impl OAuthToken {
 
 /// Device grant issued by `device_authorize`: the pair shown to the
 /// user plus the polling contract.
-#[derive(Clone, Debug)]
+///
+/// `Debug` redacts the device/user codes, the complete verification URI
+/// (which embeds the user code) and the raw token-endpoint response.
+/// Formatting a grant must never put a pollable device code in a log.
+#[derive(Clone)]
 pub struct DeviceGrant {
     pub device_code: String,
     pub user_code: String,
@@ -74,6 +79,20 @@ pub struct DeviceGrant {
     /// Provider-declared poll interval; `slow_down` responses extend it.
     pub interval: Duration,
     pub raw: Value,
+}
+
+impl fmt::Debug for DeviceGrant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DeviceGrant")
+            .field("device_code", &"<redacted>")
+            .field("user_code", &"<redacted>")
+            .field("verification_uri", &self.verification_uri.as_str())
+            .field("verification_uri_complete", &"<redacted>")
+            .field("expires_at", &self.expires_at)
+            .field("interval", &self.interval)
+            .field("raw", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Fill `bytes` from `rng` and encode them URL-safe.

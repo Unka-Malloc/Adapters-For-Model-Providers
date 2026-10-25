@@ -3,6 +3,37 @@
 All notable changes to `a4mp` are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `WireBridge::chat_stream` now creates one stream encoder and uses it for
+  both the preamble and the rest of the stream. Responses streams therefore
+  announce the same response id in `response.created`, `response.in_progress`
+  and `response.completed`.
+- `AnthropicStreamEncoder` closes every still-open content block and defers
+  `message_stop` to `finish()`, so a canonical stream that ends at `Finished`
+  (or without one) produces balanced block frames and any post-`Finished`
+  usage is emitted before the terminator.
+- `DeviceGrant`, `HttpRequest`, `HttpResponse` and `ProcessSpec` now have
+  manual `Debug` implementations. Device/user codes, the raw
+  device-authorization response, credential-bearing headers, request and
+  response bodies, process argument values and environment values are
+  redacted; non-secret metadata stays visible for diagnostics.
+- The `Credential::Cloud` redaction test uses a non-PEM private-key marker as
+  its synthetic secret, so the deterministic privacy scan no longer mistakes
+  the test fixture for a real private key.
+
+### Tests
+
+- Bridge-level Responses coverage asserts one response id across the preamble
+  and terminal frame.
+- Anthropic stream coverage asserts balanced `content_block_start` /
+  `content_block_stop` frames when a part is open at `Finished` or at stream
+  end, and asserts `message_stop` stays last when usage follows `Finished`.
+  A bridge-level test relays an OpenAI Chat-shaped canonical stream (no
+  `PartFinished`) to an Anthropic client and checks block balancing.
+
 ## [0.3.2] - 2026-10-25
 
 ### Fixed

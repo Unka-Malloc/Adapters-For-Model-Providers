@@ -416,3 +416,167 @@ fn round_trip_request_is_identity_on_representable_inputs() {
     assert_eq!(out["temperature"], 0.5);
     assert_eq!(out["stop_sequences"], json!(["END"]));
 }
+
+#[test]
+fn finished_closes_open_blocks_before_message_stop() {
+    let mut enc = stream_encoder(WireDialect::AnthropicMessages, "m");
+    let mut frames = enc.preamble();
+    frames.extend(enc.encode(&StreamEvent::PartStarted {
+        index: 0,
+        kind: PartKind::Text,
+    }));
+    frames.extend(enc.encode(&StreamEvent::TextDelta {
+        index: 0,
+        text: "hi".into(),
+    }));
+    // The canonical stream ends without a matching PartFinished, then
+    // reports usage after Finished, as real decoders do.
+    frames.extend(enc.encode(&StreamEvent::Finished {
+        stop: Some(StopReason::Complete),
+    }));
+    frames.extend(enc.encode(&StreamEvent::Usage(Usage {
+        output_tokens: Some(9),
+        ..Default::default()
+    })));
+    frames.extend(enc.finish());
+
+    let names: Vec<&str> = frames
+        .iter()
+        .map(|frame| frame.event.as_deref().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "content_block_stop",
+            "message_delta",
+            "message_delta",
+            "message_stop",
+        ]
+    );
+    assert_eq!(names.last(), Some(&"message_stop"));
+    // The usage delta arrives before the terminator, not after it.
+    let usage: serde_json::Value = serde_json::from_str(&frames[5].data).unwrap();
+    assert_eq!(usage["usage"]["output_tokens"], 9);
+    assert_eq!(
+        names
+            .iter()
+            .filter(|name| **name == "content_block_start")
+            .count(),
+        names
+            .iter()
+            .filter(|name| **name == "content_block_stop")
+            .count()
+    );
+    assert!(enc.finish().is_empty());
+}
+
+#[test]
+fn finish_closes_open_blocks_when_backend_ends_without_finished() {
+    let mut enc = stream_encoder(WireDialect::AnthropicMessages, "m");
+    enc.preamble();
+    enc.encode(&StreamEvent::PartStarted {
+        index: 0,
+        kind: PartKind::Text,
+    });
+    let tail = enc.finish();
+    let names: Vec<&str> = tail
+        .iter()
+        .map(|frame| frame.event.as_deref().unwrap_or_default())
+        .collect();
+    assert_eq!(names, ["content_block_stop", "message_stop"]);
+    assert!(enc.finish().is_empty());
+}
+
+#[tokio::test]
+async fn bridge_closes_chat_upstream_blocks_for_anthropic_client() {
+    use std::sync::Arc;
+
+    use futures_util::StreamExt;
+
+    struct ChatStreamAdapter(ServiceTarget);
+
+    #[async_trait::async_trait]
+    impl Adapter for ChatStreamAdapter {
+        fn target(&self) -> &ServiceTarget {
+            &self.0
+        }
+
+        async fn chat_stream(
+            &self,
+            _req: ChatRequest,
+            _ctrl: &RequestControl,
+        ) -> Result<DynStream<'static, StreamEvent>, Error> {
+            // Mirrors an OpenAI Chat decoder: the canonical stream ends at
+            // Finished without emitting PartFinished for the open part.
+            Ok(Box::pin(futures_util::stream::iter(vec![
+                Ok(StreamEvent::PartStarted {
+                    index: 0,
+                    kind: PartKind::Text,
+                }),
+                Ok(StreamEvent::TextDelta {
+                    index: 0,
+                    text: "hi".into(),
+                }),
+                Ok(StreamEvent::Finished {
+                    stop: Some(StopReason::Complete),
+                }),
+            ])))
+        }
+    }
+
+    let target = ServiceTarget::new(
+        "test-provider",
+        Protocol::OpenAiChatCompletions,
+        url::Url::parse("https://example.test").unwrap(),
+    );
+    let bridge = WireBridge::new(
+        Arc::new(ChatStreamAdapter(target)),
+        WireDialect::AnthropicMessages,
+    );
+    let body = br#"{"model":"claude-x","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}"#;
+    let mut stream = bridge
+        .chat_stream(body, &RequestControl::default())
+        .await
+        .unwrap();
+    let mut frames = Vec::new();
+    while let Some(frame) = stream.next().await {
+        frames.push(frame.unwrap());
+    }
+
+    let names: Vec<&str> = frames
+        .iter()
+        .map(|frame| frame.event.as_deref().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "content_block_stop",
+            "message_delta",
+            "message_stop",
+        ]
+    );
+    assert_eq!(names.last(), Some(&"message_stop"));
+
+    let frames_json: Vec<serde_json::Value> = frames
+        .iter()
+        .map(|frame| serde_json::from_str(&frame.data).unwrap())
+        .collect();
+    let starts: Vec<u64> = frames_json
+        .iter()
+        .filter(|data| data["type"] == "content_block_start")
+        .filter_map(|data| data["index"].as_u64())
+        .collect();
+    let stops: Vec<u64> = frames_json
+        .iter()
+        .filter(|data| data["type"] == "content_block_stop")
+        .filter_map(|data| data["index"].as_u64())
+        .collect();
+    assert_eq!(starts, [0]);
+    assert_eq!(stops, [0]);
+}

@@ -4,6 +4,7 @@
 //! opens user files, spawns runtimes or reads another application's
 //! login state directly — every effect crosses this port explicitly.
 
+use std::fmt;
 use std::time::Duration;
 
 use crate::api::{DynStream, Error, RequestControl};
@@ -17,7 +18,12 @@ pub struct ResourceRef {
 }
 
 /// How a required external client process should run.
-#[derive(Clone, Debug)]
+///
+/// `Debug` keeps the declared requirement, program, working directory and
+/// environment variable names, but redacts argument values and environment
+/// values: external-client command lines commonly carry API keys and
+/// session tokens.
+#[derive(Clone)]
 pub struct ProcessSpec {
     /// Declared runtime requirement (e.g. "cursor-agent >= 1.2",
     /// "python3 plugin entrypoint"). The host checks availability.
@@ -28,6 +34,21 @@ pub struct ProcessSpec {
     pub env: Vec<(String, String)>,
     /// Working directory when required; otherwise inherit.
     pub cwd: Option<String>,
+}
+
+impl fmt::Debug for ProcessSpec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProcessSpec")
+            .field("requirement", &self.requirement)
+            .field("program", &self.program)
+            .field("args", &format!("<redacted {} arg(s)>", self.args.len()))
+            .field(
+                "env_keys",
+                &self.env.iter().map(|(key, _)| key).collect::<Vec<_>>(),
+            )
+            .field("cwd", &self.cwd)
+            .finish()
+    }
 }
 
 /// A running external process with a bounded, pull-based output stream.

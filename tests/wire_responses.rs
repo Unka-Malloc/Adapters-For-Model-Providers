@@ -7,7 +7,7 @@ use a4mp::protocols::openai_responses::ResponsesStreamDecoder;
 use a4mp::transport::SseEventDecoder;
 use a4mp::wire::*;
 use a4mp::*;
-use serde_json::{Map, json};
+use serde_json::{Map, Value, json};
 
 fn decode(body: &serde_json::Value) -> (ChatRequest, ConversionReport) {
     decode_chat_request(
@@ -606,4 +606,82 @@ fn stop_is_preserved_and_reported_once() {
         .filter(|p| p.as_str() == "request.stop")
         .count();
     assert_eq!(repeated, 1, "losses: {:?}", loss_paths(&report));
+}
+
+#[tokio::test]
+async fn bridge_stream_reuses_one_responses_encoder() {
+    use std::sync::Arc;
+
+    use futures_util::StreamExt;
+
+    struct StreamAdapter(ServiceTarget);
+
+    #[async_trait::async_trait]
+    impl Adapter for StreamAdapter {
+        fn target(&self) -> &ServiceTarget {
+            &self.0
+        }
+
+        async fn chat_stream(
+            &self,
+            _req: ChatRequest,
+            _ctrl: &RequestControl,
+        ) -> Result<DynStream<'static, StreamEvent>, Error> {
+            Ok(Box::pin(futures_util::stream::iter(vec![
+                Ok(StreamEvent::PartStarted {
+                    index: 0,
+                    kind: PartKind::Text,
+                }),
+                Ok(StreamEvent::TextDelta {
+                    index: 0,
+                    text: "hi".into(),
+                }),
+                Ok(StreamEvent::PartFinished { index: 0 }),
+                Ok(StreamEvent::Finished {
+                    stop: Some(StopReason::Complete),
+                }),
+            ])))
+        }
+    }
+
+    let target = ServiceTarget::new(
+        "test-provider",
+        Protocol::OpenAiResponses,
+        url::Url::parse("https://example.test").unwrap(),
+    );
+    let bridge = WireBridge::new(
+        Arc::new(StreamAdapter(target)),
+        WireDialect::OpenAiResponses,
+    );
+    let body = br#"{"model":"gpt-x","input":"hi","stream":true}"#;
+    let mut stream = bridge
+        .chat_stream(body, &RequestControl::default())
+        .await
+        .unwrap();
+    let mut frames = Vec::new();
+    while let Some(frame) = stream.next().await {
+        frames.push(frame.unwrap());
+    }
+
+    // response.created, response.in_progress and response.completed all
+    // carry the response id; a second encoder instance would make the
+    // terminal id differ from the preamble id.
+    let response_ids: Vec<String> = frames
+        .iter()
+        .filter_map(|frame| {
+            let data: Value = serde_json::from_str(&frame.data).unwrap();
+            data.pointer("/response/id")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect();
+    assert!(response_ids.len() >= 3, "{response_ids:?}");
+    assert!(
+        response_ids.windows(2).all(|pair| pair[0] == pair[1]),
+        "{response_ids:?}"
+    );
+    assert_eq!(
+        frames.last().unwrap().event.as_deref(),
+        Some("response.completed")
+    );
 }

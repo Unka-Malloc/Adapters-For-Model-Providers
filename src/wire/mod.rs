@@ -105,8 +105,11 @@ pub trait StreamEncoder: Send {
 }
 
 /// Open a stream encoder for `dialect`. `model` is echoed into every
-/// chunk or envelope. Emit `encode_stream_start` frames first, feed
-/// events through `encode`, then call `finish` for the terminator.
+/// chunk or envelope. Call the returned encoder's `preamble()` first,
+/// feed events through its `encode`, then call its `finish`. Keep one
+/// instance for the whole stream: encoders such as Responses mint state
+/// (a response id) in `new()`, so pairing a different encoder's preamble
+/// with this one would announce and complete different ids.
 pub fn stream_encoder(dialect: WireDialect, model: &str) -> Box<dyn StreamEncoder> {
     match dialect {
         WireDialect::OpenAiChatCompletions => Box::new(OpenAiStreamEncoder::new(model)),
@@ -115,9 +118,9 @@ pub fn stream_encoder(dialect: WireDialect, model: &str) -> Box<dyn StreamEncode
     }
 }
 
-/// The frames that open a dialect stream before the first event.
-/// Equivalent to a fresh encoder's `preamble()` — emit one or the
-/// other, not both.
+/// The frames that open a dialect stream before the first event, for
+/// one-shot inspection. Do not combine this output with a separately
+/// created encoder: obtain `preamble()` from the encoder you will feed.
 pub fn encode_stream_start(dialect: WireDialect, model: &str) -> Vec<SseEvent> {
     stream_encoder(dialect, model).preamble()
 }
@@ -169,9 +172,14 @@ impl WireBridge {
         let (request, _report) = decode_chat_request(self.dialect, body)?;
         let model = request.model.clone();
         let inner = self.adapter.chat_stream(request, ctrl).await?;
+        // One encoder owns both the preamble and the rest of the stream.
+        // Encoders such as Responses generate a response id in `new()`, so
+        // two instances would announce one id and complete another.
+        let mut encoder = stream_encoder(self.dialect, &model);
+        let pending = encoder.preamble().into();
         Ok(Box::pin(BridgeStream {
-            pending: stream_encoder(self.dialect, &model).preamble().into(),
-            encoder: stream_encoder(self.dialect, &model),
+            pending,
+            encoder,
             inner,
             finished: false,
         }))

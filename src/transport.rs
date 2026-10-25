@@ -16,15 +16,74 @@ mod ws_transport;
 #[cfg(feature = "realtime-ws")]
 pub use ws_transport::WsTransport;
 
+use std::fmt;
+
 use crate::api::{DynStream, Error, RequestControl, RetrySafety};
 
+/// Header values safe to render in diagnostics. Every other header may
+/// carry a credential and is redacted by the manual `Debug` impls.
+const DEBUG_SAFE_HEADERS: &[&str] = &["accept", "content-length", "content-type", "user-agent"];
+
+struct RedactedHeaders<'a>(&'a http::HeaderMap);
+
+impl fmt::Debug for RedactedHeaders<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut map = f.debug_map();
+        for (name, value) in self.0 {
+            if DEBUG_SAFE_HEADERS.contains(&name.as_str()) {
+                map.entry(&name.as_str(), &value.to_str().unwrap_or("<non-text>"));
+            } else {
+                map.entry(&name.as_str(), &"<redacted>");
+            }
+        }
+        map.finish()
+    }
+}
+
+/// Render a URL without userinfo, query values or fragments. Query strings
+/// can carry provider keys; paths and hosts remain useful to diagnostics.
+fn redacted_url(url: &url::Url) -> String {
+    let mut out = format!("{}://", url.scheme());
+    if let Some(host) = url.host_str() {
+        out.push_str(host);
+    }
+    if let Some(port) = url.port() {
+        out.push(':');
+        out.push_str(&port.to_string());
+    }
+    out.push_str(url.path());
+    if url.query().is_some() {
+        out.push_str("?<redacted>");
+    }
+    out
+}
+
+fn redacted_body(len: usize) -> String {
+    format!("<redacted {len} bytes>")
+}
+
 /// An HTTP request issued through the transport port.
-#[derive(Clone, Debug)]
+///
+/// `Debug` shows the method, a credential-stripped URL, header names and
+/// body length; header values outside a small safe set and the body are
+/// redacted so transport logging cannot disclose API keys or prompts.
+#[derive(Clone)]
 pub struct HttpRequest {
     pub method: http::Method,
     pub url: url::Url,
     pub headers: http::HeaderMap,
     pub body: bytes::Bytes,
+}
+
+impl fmt::Debug for HttpRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HttpRequest")
+            .field("method", &self.method)
+            .field("url", &redacted_url(&self.url))
+            .field("headers", &RedactedHeaders(&self.headers))
+            .field("body", &redacted_body(self.body.len()))
+            .finish()
+    }
 }
 
 impl HttpRequest {
@@ -53,11 +112,25 @@ impl HttpRequest {
 }
 
 /// A buffered HTTP response.
-#[derive(Clone, Debug)]
+///
+/// `Debug` shows the status, safe header values and body length; other
+/// header values and the body are redacted because token-endpoint and
+/// provider error bodies can carry credentials.
+#[derive(Clone)]
 pub struct HttpResponse {
     pub status: http::StatusCode,
     pub headers: http::HeaderMap,
     pub body: bytes::Bytes,
+}
+
+impl fmt::Debug for HttpResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HttpResponse")
+            .field("status", &self.status)
+            .field("headers", &RedactedHeaders(&self.headers))
+            .field("body", &redacted_body(self.body.len()))
+            .finish()
+    }
 }
 
 /// A streaming HTTP response: status and headers first, then a pull-based

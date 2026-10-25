@@ -6,7 +6,7 @@
 //! Unknown request blocks keep the Messages opaque-reasoning form so a
 //! same-dialect backend still receives them verbatim.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use serde_json::{Map, Value, json};
 
@@ -542,6 +542,12 @@ pub struct AnthropicStreamEncoder {
     pending_other: HashSet<u32>,
     /// Media parts: their deltas have no wire form.
     media_parts: HashSet<u32>,
+    /// Wire block indices opened but not yet closed.
+    open_blocks: BTreeSet<u32>,
+    /// `Finished` emitted the stop-reason delta; `finish` still owes
+    /// `message_stop`.
+    finished: bool,
+    /// `message_stop` was emitted; the stream is terminal.
     stop_sent: bool,
     losses: Vec<ConversionLoss>,
 }
@@ -555,6 +561,8 @@ impl AnthropicStreamEncoder {
             preambled: false,
             pending_other: HashSet::new(),
             media_parts: HashSet::new(),
+            open_blocks: BTreeSet::new(),
+            finished: false,
             stop_sent: false,
             losses: Vec::new(),
         }
@@ -578,6 +586,7 @@ impl AnthropicStreamEncoder {
 
     fn block_start(&mut self, index: u32, block: Value) -> SseEvent {
         let wire = self.block(index);
+        self.open_blocks.insert(wire);
         self.frame(
             "content_block_start",
             json!({ "type": "content_block_start", "index": wire, "content_block": block }),
@@ -594,10 +603,26 @@ impl AnthropicStreamEncoder {
 
     fn block_stop(&mut self, index: u32) -> SseEvent {
         let wire = self.block(index);
+        self.open_blocks.remove(&wire);
         self.frame(
             "content_block_stop",
             json!({ "type": "content_block_stop", "index": wire }),
         )
+    }
+
+    /// Close every block the encoder opened but has not yet stopped.
+    /// Messages streams must not reach `message_stop` with a block still
+    /// open: clients wait for block completion and may drop the output.
+    fn close_open_blocks(&mut self) -> Vec<SseEvent> {
+        std::mem::take(&mut self.open_blocks)
+            .into_iter()
+            .map(|wire| {
+                self.frame(
+                    "content_block_stop",
+                    json!({ "type": "content_block_stop", "index": wire }),
+                )
+            })
+            .collect()
     }
 }
 
@@ -707,6 +732,13 @@ impl StreamEncoder for AnthropicStreamEncoder {
                 ));
             }
             StreamEvent::Finished { stop } => {
+                if self.finished {
+                    return out;
+                }
+                self.finished = true;
+                // Close any block left open by a stream that terminates
+                // without a matching PartFinished before ending the message.
+                out.extend(self.close_open_blocks());
                 let mut report = response_report(WireDialect::AnthropicMessages);
                 let reason = stop_reason(stop.as_ref(), &mut report);
                 self.losses.extend(report.losses);
@@ -717,21 +749,29 @@ impl StreamEncoder for AnthropicStreamEncoder {
                         "delta": { "stop_reason": reason, "stop_sequence": Value::Null },
                     }),
                 ));
-                self.stop_sent = true;
-                out.push(self.frame("message_stop", json!({ "type": "message_stop" })));
+                // `message_stop` is deferred to `finish()` so a decoder
+                // that reports usage after `Finished` can still emit its
+                // `message_delta` before the terminator.
             }
         }
         out
     }
 
-    /// `message_stop` closes the envelope; emitted at `Finished` or, if
-    /// the backend ended without one, at stream end.
+    /// `message_stop` closes the envelope and is always the final frame,
+    /// whether the backend sent `Finished` or ended at the transport.
+    /// Any open content blocks are stopped first.
     fn finish(&mut self) -> Vec<SseEvent> {
         if self.stop_sent {
             return Vec::new();
         }
+        let mut out = if self.finished {
+            Vec::new()
+        } else {
+            self.close_open_blocks()
+        };
         self.stop_sent = true;
-        vec![self.frame("message_stop", json!({ "type": "message_stop" }))]
+        out.push(self.frame("message_stop", json!({ "type": "message_stop" })));
+        out
     }
 
     fn drain_losses(&mut self) -> Vec<ConversionLoss> {

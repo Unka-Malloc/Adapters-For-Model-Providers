@@ -169,3 +169,113 @@ async fn adapter_defaults_report_unsupported() {
         .await;
     assert!(matches!(err, Err(Error::Unsupported(_))));
 }
+
+#[test]
+fn device_grant_debug_redacts_codes_and_raw_response() {
+    let device_code = fixture_token("device");
+    let user_code = fixture_token("user");
+    let raw_token = fixture_token("raw");
+    let grant = a4mp::oauth::DeviceGrant {
+        device_code: device_code.clone(),
+        user_code: user_code.clone(),
+        verification_uri: url::Url::parse("https://example.test/device").unwrap(),
+        verification_uri_complete: Some(
+            url::Url::parse(&format!(
+                "https://example.test/device?user_code={user_code}"
+            ))
+            .unwrap(),
+        ),
+        expires_at: std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(60),
+        interval: std::time::Duration::from_secs(5),
+        raw: serde_json::json!({"access_token": raw_token}),
+    };
+    let debug = format!("{grant:?}");
+    for leaked in [&device_code, &user_code, &raw_token] {
+        assert!(
+            !debug.contains(leaked),
+            "DeviceGrant Debug leaked {leaked:?}: {debug}"
+        );
+    }
+    // The bare verification endpoint and polling metadata stay visible.
+    assert!(debug.contains("https://example.test/device"), "{debug}");
+    assert!(debug.contains("<redacted>"), "{debug}");
+}
+
+#[test]
+fn http_request_and_response_debug_redact_credentials() {
+    let mut request = HttpRequest::get(
+        url::Url::parse(&format!("https://api.example.test/v1/chat?key={}", common::run_token("query"))).unwrap(),
+    );
+    request.headers.insert(
+        http::header::AUTHORIZATION,
+        http::HeaderValue::from_str(&format!("Bearer {}", common::run_token("bearer"))).unwrap(),
+    );
+    for (name, value) in [
+        ("x-api-key", common::run_token("api-key")),
+        ("x-goog-api-key", common::run_token("goog-key")),
+        ("x-amz-security-token", common::run_token("session")),
+    ] {
+        request.headers.insert(
+            http::HeaderName::from_static(name),
+            http::HeaderValue::from_static(value),
+        );
+    }
+    request.body = bytes::Bytes::from(format!(r#"{{"prompt":"{}"}}"#, common::run_token("request-body")));
+    let debug = format!("{request:?}");
+    for leaked in [
+        common::run_token("query"),
+        common::run_token("bearer"),
+        common::run_token("api-key"),
+        common::run_token("goog-key"),
+        common::run_token("session"),
+        common::run_token("request-body"),
+    ] {
+        assert!(
+            !debug.contains(leaked),
+            "HttpRequest Debug leaked {leaked:?}: {debug}"
+        );
+    }
+    assert!(debug.contains("api.example.test"), "{debug}");
+    assert!(debug.contains("GET"), "{debug}");
+    assert!(debug.contains("authorization"), "{debug}");
+
+    let mut response = HttpResponse {
+        status: http::StatusCode::UNAUTHORIZED,
+        headers: http::HeaderMap::new(),
+        body: bytes::Bytes::from(format!(r#"{{"error":"{}"}}"#, common::run_token("response-body"))),
+    };
+    response.headers.insert(
+        http::header::AUTHORIZATION,
+        http::HeaderValue::from_str(&format!("Bearer {}", common::run_token("response-header"))).unwrap(),
+    );
+    let debug = format!("{response:?}");
+    for leaked in [common::run_token("response-body"), common::run_token("response-header")] {
+        assert!(
+            !debug.contains(leaked),
+            "HttpResponse Debug leaked {leaked:?}: {debug}"
+        );
+    }
+    assert!(debug.contains("401"), "{debug}");
+}
+
+#[test]
+fn process_spec_debug_redacts_arguments_and_environment_values() {
+    let spec = ProcessSpec {
+        requirement: "cursor-agent >= 1.2".into(),
+        program: "cursor-agent".into(),
+        args: vec!["--api-key".into(), common::run_token("argument").into()],
+        env: vec![("CURSOR_API_KEY".into(), common::run_token("environment").into())],
+        cwd: Some("workdir".into()),
+    };
+    let debug = format!("{spec:?}");
+    for leaked in [common::run_token("argument"), common::run_token("environment")] {
+        assert!(
+            !debug.contains(leaked),
+            "ProcessSpec Debug leaked {leaked:?}: {debug}"
+        );
+    }
+    // Non-secret metadata remains inspectable.
+    assert!(debug.contains("cursor-agent"), "{debug}");
+    assert!(debug.contains("CURSOR_API_KEY"), "{debug}");
+    assert!(debug.contains("workdir"), "{debug}");
+}
