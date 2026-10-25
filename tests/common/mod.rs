@@ -148,3 +148,29 @@ pub async fn collect<T>(mut stream: DynStream<'_, T>) -> Result<Vec<T>, Error> {
 pub fn body_json(req: &RecordedRequest) -> serde_json::Value {
     serde_json::from_slice(&req.body).unwrap()
 }
+
+/// Opaque fixture tokens are minted per run, not written into the
+/// file — test-custody rules keep even fake credential-shaped
+/// literals out of test material.
+pub fn fixture_token(tag: &str) -> String {
+    format!(
+        "fixture-{tag}-{:x}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    )
+}
+
+/// One fixture token per tag for the whole test binary, so an adapter
+/// built in a helper and the assertion that checks its header agree on
+/// the minted value.
+pub fn run_token(tag: &str) -> &'static str {
+    static TOKENS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, &'static str>>,
+    > = std::sync::OnceLock::new();
+    let mut tokens = TOKENS.get_or_init(Default::default).lock().unwrap();
+    tokens
+        .entry(tag.to_owned())
+        .or_insert_with(|| Box::leak(fixture_token(tag).into_boxed_str()))
+}

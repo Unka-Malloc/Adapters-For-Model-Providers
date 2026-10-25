@@ -25,7 +25,7 @@ fn adapter(transport: MockTransport) -> GeminiAdapter {
     adapter_with(
         transport,
         AuthKind::ApiKey,
-        Credential::ApiKey(Secret::new("key-abc")),
+        Credential::ApiKey(Secret::new(common::run_token("api-key"))),
     )
 }
 
@@ -112,7 +112,7 @@ async fn chat_request_maps_contents_system_tools_config_and_extensions() {
     let rec = &t.recorded()[0];
     // Model id rides the URL path, not the body.
     assert_eq!(rec.url.path(), "/v1beta/models/gemini-test-1:generateContent");
-    assert_eq!(rec.headers.get("x-goog-api-key").unwrap(), "key-abc");
+    assert_eq!(rec.headers.get("x-goog-api-key").unwrap(), common::run_token("api-key"));
     assert!(rec.headers.get("authorization").is_none());
     let b = body_json(rec);
     assert!(b.get("model").is_none());
@@ -282,7 +282,7 @@ fn decode_response_maps_finish_reasons() {
 }
 
 #[test]
-fn decode_response_block_reason_is_provider_error() {
+fn decode_response_block_reason_is_unsafe_provider_error() {
     let body = json!({
         "promptFeedback": {
             "blockReason": "SAFETY",
@@ -301,7 +301,9 @@ fn decode_response_block_reason_is_provider_error() {
             assert_eq!(status, None);
             assert_eq!(code.as_deref(), Some("SAFETY"));
             assert_eq!(message, "prompt tripped a filter");
-            assert_eq!(retry, RetrySafety::Safe);
+            // The block arrived in a 2xx body: the provider already saw
+            // the prompt, so a replay is not provably free.
+            assert_eq!(retry, RetrySafety::Unsafe);
         }
         other => panic!("expected provider error, got {other:?}"),
     }
@@ -400,7 +402,7 @@ async fn bearer_auth_uses_authorization_header() {
         t.clone(),
         AuthKind::Bearer,
         Credential::Bearer {
-            token: Secret::new("tok-1"),
+            token: Secret::new(common::run_token("bearer")),
             expires_at: None,
         },
     );
@@ -408,7 +410,7 @@ async fn bearer_auth_uses_authorization_header() {
         .await
         .unwrap();
     let rec = &t.recorded()[0];
-    assert_eq!(rec.headers.get("authorization").unwrap(), "Bearer tok-1");
+    assert_eq!(rec.headers.get("authorization").unwrap(), format!("Bearer {}", common::run_token("bearer")).as_str());
     assert!(rec.headers.get("x-goog-api-key").is_none());
 }
 
@@ -440,10 +442,34 @@ async fn http_error_maps_gemini_error_envelope() {
     t.push(Response::Text(500, "upstream exploded"));
     let a = adapter(t);
     match a.chat(ChatRequest::default(), &RequestControl::default()).await {
-        Err(Error::Provider {
-            status, retry, ..
-        }) => {
+        Err(Error::Provider { status, retry, .. }) => {
             assert_eq!(status, Some(500));
+            assert_eq!(retry, RetrySafety::Unsafe);
+        }
+        other => panic!("expected provider error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn chat_error_envelope_after_2xx_is_unsafe_to_retry() {
+    // A 200 response whose body carries a 429-shaped error envelope is
+    // still post-dispatch: the provider accepted the call, so replaying
+    // the prompt could repeat billed work.
+    let t = MockTransport::new();
+    t.push(Response::Json(
+        200,
+        json!({"error": {"code": 429, "message": "quota exhausted", "status": "RESOURCE_EXHAUSTED"}}),
+    ));
+    let a = adapter(t);
+    match a.chat(ChatRequest::default(), &RequestControl::default()).await {
+        Err(Error::Provider {
+            status,
+            code,
+            retry,
+            ..
+        }) => {
+            assert_eq!(status, Some(429));
+            assert_eq!(code.as_deref(), Some("RESOURCE_EXHAUSTED"));
             assert_eq!(retry, RetrySafety::Unsafe);
         }
         other => panic!("expected provider error, got {other:?}"),
@@ -474,6 +500,35 @@ async fn stream_http_error_drains_body_into_provider_error() {
         }
         Err(other) => panic!("expected provider error, got {other:?}"),
         Ok(_) => panic!("expected provider error, got a stream"),
+    }
+}
+
+#[tokio::test]
+async fn stream_error_frame_after_2xx_is_unsafe_to_retry() {
+    // The SSE transport returned 200 and at least one accepted response;
+    // an error frame inside that stream is post-dispatch and must not be
+    // classified as a free 4xx retry.
+    let t = MockTransport::new();
+    t.push(Response::Sse(vec![
+        "data: {\"error\":{\"code\":429,\"message\":\"quota exhausted\",\"status\":\"RESOURCE_EXHAUSTED\"}}\n\n",
+    ]));
+    let a = adapter(t);
+    let stream = a
+        .chat_stream(ChatRequest::default(), &RequestControl::default())
+        .await
+        .unwrap();
+    match collect(stream).await {
+        Err(Error::Provider {
+            status,
+            code,
+            retry,
+            ..
+        }) => {
+            assert_eq!(status, Some(429));
+            assert_eq!(code.as_deref(), Some("RESOURCE_EXHAUSTED"));
+            assert_eq!(retry, RetrySafety::Unsafe);
+        }
+        other => panic!("expected provider error, got {other:?}"),
     }
 }
 

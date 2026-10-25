@@ -7,6 +7,8 @@
 use std::fmt;
 use std::time::SystemTime;
 
+use serde_json::{Map, Value};
+
 use crate::api::{Error, ServiceTarget};
 
 /// Authentication mechanism a service target requires.
@@ -55,7 +57,7 @@ impl fmt::Display for Secret {
 }
 
 /// Resolved credential bound to an authentication mechanism.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 #[non_exhaustive]
 pub enum Credential {
     None,
@@ -68,9 +70,97 @@ pub enum Credential {
     Cloud {
         token: Secret,
         expires_at: Option<SystemTime>,
-        /// Mechanism-scoped fields (region, session name, …).
-        context: serde_json::Map<String, serde_json::Value>,
+        /// Mechanism-scoped fields (region, session name, …). Fields
+        /// whose names denote secrets (`session_token`, `secret_access_key`,
+        /// `private_key`, …) are redacted in `Debug` at any nesting depth;
+        /// callers still read them through the typed context accessors.
+        context: Map<String, Value>,
     },
+}
+
+impl fmt::Debug for Credential {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Credential::None => f.write_str("None"),
+            Credential::ApiKey(token) => f.debug_tuple("ApiKey").field(token).finish(),
+            Credential::Bearer { token, expires_at } => f
+                .debug_struct("Bearer")
+                .field("token", token)
+                .field("expires_at", expires_at)
+                .finish(),
+            Credential::Cloud {
+                token,
+                expires_at,
+                context,
+            } => f
+                .debug_struct("Cloud")
+                .field("token", token)
+                .field("expires_at", expires_at)
+                .field("context", &RedactedContext(context))
+                .finish(),
+        }
+    }
+}
+
+/// `Debug` view of a cloud credential context: secret-named values are
+/// replaced with `"<redacted>"` recursively. A host may log a credential
+/// it resolved or rejected; the AWS STS session token and every other
+/// secret-shaped field must never reach that log.
+struct RedactedContext<'a>(&'a Map<String, Value>);
+
+impl fmt::Debug for RedactedContext<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut map = f.debug_map();
+        for (key, value) in self.0 {
+            map.entry(key, &RedactedValue { key, value });
+        }
+        map.finish()
+    }
+}
+
+struct RedactedValue<'a> {
+    key: &'a str,
+    value: &'a Value,
+}
+
+impl fmt::Debug for RedactedValue<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if is_secret_context_key(self.key) {
+            return f.write_str("\"<redacted>\"");
+        }
+        match self.value {
+            Value::Object(map) => fmt::Debug::fmt(&RedactedContext(map), f),
+            Value::Array(items) => f
+                .debug_list()
+                .entries(items.iter().map(|value| RedactedValue {
+                    key: self.key,
+                    value,
+                }))
+                .finish(),
+            value => fmt::Debug::fmt(value, f),
+        }
+    }
+}
+
+/// Whether a context key names credential material. Matching is
+/// case-insensitive on credential-bearing substrings, so `session_token`,
+/// `secretAccessKey` and `api-key` all match while `region`, `service`
+/// and `session_name` stay visible.
+fn is_secret_context_key(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    [
+        "token",
+        "secret",
+        "password",
+        "passwd",
+        "credential",
+        "key",
+        "signature",
+        "authorization",
+        "cookie",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
 }
 
 /// What the resolver must produce a credential for.

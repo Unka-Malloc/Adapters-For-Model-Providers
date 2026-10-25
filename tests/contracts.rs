@@ -2,6 +2,9 @@
 
 use a4mp::*;
 
+mod common;
+use common::fixture_token;
+
 #[test]
 fn provider_id_is_open_and_transparent() {
     let id = ProviderId::new("deepseek");
@@ -14,10 +17,52 @@ fn provider_id_is_open_and_transparent() {
 
 #[test]
 fn secret_never_leaks_in_debug_or_display() {
-    let s = Secret::new("sk-live-material");
-    assert!(!format!("{s:?}").contains("sk-live-material"));
-    assert!(!format!("{s}").contains("sk-live-material"));
-    assert_eq!(s.expose(), "sk-live-material");
+    let material = fixture_token("secret");
+    let s = Secret::new(material.clone());
+    assert!(!format!("{s:?}").contains(&material));
+    assert!(!format!("{s}").contains(&material));
+    assert_eq!(s.expose(), material);
+}
+
+#[test]
+fn cloud_credential_debug_redacts_secret_context_at_any_depth() {
+    let access_id = fixture_token("access-id");
+    let session = fixture_token("session");
+    let camel = fixture_token("camel");
+    let private = fixture_token("private");
+    let nested = fixture_token("nested");
+    let token = fixture_token("token");
+    let mut context = serde_json::Map::new();
+    context.insert("access_key_id".into(), serde_json::json!(access_id));
+    context.insert("session_token".into(), serde_json::json!(session));
+    context.insert("region".into(), serde_json::json!("us-east-1"));
+    context.insert("service".into(), serde_json::json!("bedrock"));
+    context.insert("session_name".into(), serde_json::json!("nightly"));
+    context.insert("secretAccessKey".into(), serde_json::json!(camel));
+    context.insert("private_key".into(), serde_json::json!(private));
+    context.insert(
+        "sts".into(),
+        serde_json::json!({"client_secret": nested, "label": "visible"}),
+    );
+    let cred = Credential::Cloud {
+        token: Secret::new(token.clone()),
+        expires_at: None,
+        context,
+    };
+
+    let debug = format!("{cred:?}");
+    for leaked in [&session, &access_id, &private, &nested, &camel, &token] {
+        assert!(
+            !debug.contains(leaked),
+            "credential Debug leaked {leaked:?}: {debug}"
+        );
+    }
+    assert!(debug.contains("<redacted>"), "{debug}");
+    // Non-secret mechanism metadata remains inspectable for diagnostics.
+    assert!(debug.contains("us-east-1"), "{debug}");
+    assert!(debug.contains("bedrock"), "{debug}");
+    assert!(debug.contains("nightly"), "{debug}");
+    assert!(debug.contains("visible"), "{debug}");
 }
 
 #[test]

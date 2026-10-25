@@ -253,7 +253,7 @@ pub fn decode_response(body: &[u8]) -> Result<Output, Error> {
     let v: Value = serde_json::from_slice(body)
         .map_err(|e| Error::UpstreamProtocol(format!("generateContent response: {e}")))?;
     if v.get("error").filter(|e| !e.is_null()).is_some() {
-        return Err(provider_error(None, &v));
+        return Err(upstream_error(&v));
     }
     if let Some(reason) = v["promptFeedback"]["blockReason"].as_str() {
         return Err(blocked_prompt(reason, &v));
@@ -432,6 +432,8 @@ pub(crate) fn decode_usage(u: &Value) -> Usage {
 }
 
 /// A blocked prompt is a provider rejection, not a filtered completion.
+/// It is observed in a 2xx body, after dispatch, so the provider may
+/// already have processed the input; a replay cannot be assumed free.
 fn blocked_prompt(reason: &str, body: &Value) -> Error {
     let message = body["promptFeedback"]["blockReasonMessage"]
         .as_str()
@@ -441,13 +443,18 @@ fn blocked_prompt(reason: &str, body: &Value) -> Error {
         status: None,
         code: Some(reason.to_owned()),
         message,
-        retry: RetrySafety::Safe,
+        retry: RetrySafety::Unsafe,
         raw: Some(body.clone()),
     }
 }
 
 /// Map a Gemini error envelope `{"error":{"code":int,"message","status"}}`
 /// into `Error::Provider`. `status` is the HTTP status when known.
+///
+/// Use this only for a non-2xx response: there the HTTP status itself
+/// proves the provider rejected the request before accepting work. A
+/// provider error carried inside a 2xx body or stream frame must go
+/// through [`upstream_error`], which forces retries unsafe.
 pub fn provider_error(status: Option<u16>, body: &Value) -> Error {
     let err = body.get("error").filter(|e| !e.is_null()).unwrap_or(body);
     let status = status.or_else(|| err["code"].as_u64().map(|c| c as u16));
@@ -468,6 +475,20 @@ pub fn provider_error(status: Option<u16>, body: &Value) -> Error {
         },
         raw: Some(body.clone()),
     }
+}
+
+/// A provider error decoded from a 2xx response body or stream frame.
+/// The transport already delivered an accepted response, so the provider
+/// may have accepted or billed the work: retrying is unsafe regardless of
+/// the embedded `error.code`. In particular, a 429-shaped body that
+/// arrives mid-stream must not be classified as a free pre-dispatch
+/// rejection merely because its code is 4xx.
+pub fn upstream_error(body: &Value) -> Error {
+    let mut err = provider_error(None, body);
+    if let Error::Provider { retry, .. } = &mut err {
+        *retry = RetrySafety::Unsafe;
+    }
+    err
 }
 
 /// Status-code error for non-2xx responses whose body may be JSON or text.
@@ -660,7 +681,7 @@ impl crate::transport::SseEventDecoder for GenerateStreamDecoder {
         let v: Value = serde_json::from_str(data)
             .map_err(|e| Error::UpstreamProtocol(format!("stream chunk: {e}")))?;
         if v.get("error").filter(|e| !e.is_null()).is_some() {
-            return Err(provider_error(None, &v));
+            return Err(upstream_error(&v));
         }
         if let Some(reason) = v["promptFeedback"]["blockReason"].as_str() {
             return Err(blocked_prompt(reason, &v));

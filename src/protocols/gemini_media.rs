@@ -9,7 +9,7 @@ use serde_json::{Map, Value, json};
 
 use crate::api::*;
 use crate::protocols::base64_decode;
-use crate::protocols::gemini_generate::provider_error;
+use crate::protocols::gemini_generate::upstream_error;
 
 // ---------------------------------------------------------------------------
 // Shared
@@ -104,7 +104,9 @@ pub fn build_image_request(req: &ImageRequest) -> Result<Value, Error> {
 pub fn decode_image_output(body: &[u8]) -> Result<MediaOutput, Error> {
     let v = parse(body, "predict response")?;
     if v.get("error").filter(|e| !e.is_null()).is_some() {
-        return Err(provider_error(None, &v));
+        // A 2xx body carrying an error envelope is a post-dispatch
+        // failure; the request already reached the provider.
+        return Err(upstream_error(&v));
     }
     let predictions = v["predictions"]
         .as_array()
@@ -176,7 +178,9 @@ pub fn build_video_request(req: &VideoRequest) -> Result<Value, Error> {
 pub fn decode_operation_handle(target: &ServiceTarget, body: &[u8]) -> Result<JobHandle, Error> {
     let v = parse(body, "operation submit response")?;
     if v.get("error").filter(|e| !e.is_null()).is_some() {
-        return Err(provider_error(None, &v));
+        // The submit was dispatched and answered 2xx; replaying it would
+        // start (and bill) a second long-running job.
+        return Err(upstream_error(&v));
     }
     let name = v["name"]
         .as_str()

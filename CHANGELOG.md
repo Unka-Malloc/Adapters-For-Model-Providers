@@ -3,6 +3,30 @@
 All notable changes to `a4mp` are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-10-25
+
+### Fixed
+
+- Gemini provider errors decoded from a 2xx response body or stream frame now
+  report `RetrySafety::Unsafe`, including 429-shaped error envelopes and
+  blocked prompts. Retrying such a response can resend the prompt and re-bill
+  work the provider already accepted. Non-2xx `http_error` responses keep their
+  status-based classification because the HTTP status itself proves rejection
+  before acceptance.
+- `Credential` now has a manual `Debug` implementation. Cloud-identity context
+  fields whose names denote secrets (`session_token`, `secret_access_key`,
+  `secretAccessKey`, `private_key`, …) are redacted recursively, so a host that
+  logs a resolved or rejected credential cannot leak an AWS STS session token.
+  Non-secret mechanism metadata such as `region` and `service` stays visible.
+
+### Tests
+
+- Post-2xx Gemini error envelopes are covered on chat, streaming, image and
+  long-running-operation submit paths, while real non-2xx rejections remain
+  `Safe`.
+- `Credential::Cloud` debug output is tested for redaction at nested depth,
+  including camelCase and snake_case secret keys.
+
 ## [0.3.1] - 2026-10-25
 
 ### Fixed

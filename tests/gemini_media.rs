@@ -25,9 +25,7 @@ fn adapter(transport: MockTransport) -> GeminiAdapter {
         target,
         AuthKind::ApiKey,
         Arc::new(transport),
-        Arc::new(StaticCredential(Credential::ApiKey(Secret::new(
-            "key-abc",
-        )))),
+        Arc::new(StaticCredential(Credential::ApiKey(Secret::new(common::run_token("api-key"))))),
     )
     .unwrap()
 }
@@ -82,7 +80,7 @@ async fn image_predict_maps_instance_parameters_and_decodes_media() {
         rec.url.path(),
         "/v1beta/models/imagen-3.0-generate:predict"
     );
-    assert_eq!(rec.headers.get("x-goog-api-key").unwrap(), "key-abc");
+    assert_eq!(rec.headers.get("x-goog-api-key").unwrap(), common::run_token("api-key"));
     let b = body_json(rec);
     // The prompt is the single instance; `instance` merges into it.
     assert_eq!(
@@ -200,6 +198,38 @@ async fn image_http_error_maps_gemini_error_envelope() {
 }
 
 #[tokio::test]
+async fn image_error_envelope_after_2xx_is_unsafe_to_retry() {
+    // A 200 predict response carrying a 4xx-shaped error envelope still
+    // means the image request reached the provider; retrying may bill a
+    // second generation.
+    let t = MockTransport::new();
+    t.push(Response::Json(
+        200,
+        json!({"error": {"code": 400, "message": "bad prompt", "status": "INVALID_ARGUMENT"}}),
+    ));
+    let a = adapter(t);
+    match a
+        .image(
+            ImageRequest {
+                model: "imagen-3.0-generate".into(),
+                prompt: "x".into(),
+                count: None,
+                size: None,
+                extensions: Extensions::new(),
+            },
+            &RequestControl::default(),
+        )
+        .await
+    {
+        Err(Error::Provider { status, retry, .. }) => {
+            assert_eq!(status, Some(400));
+            assert_eq!(retry, RetrySafety::Unsafe);
+        }
+        other => panic!("expected provider error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn non_object_instance_extension_is_rejected() {
     let t = MockTransport::new();
     let a = adapter(t.clone());
@@ -275,6 +305,34 @@ async fn submit_job_posts_predict_long_running_and_returns_handle() {
     assert_eq!(h.protocol, Protocol::GeminiGenerateContent);
     assert_eq!(h.id, "models/veo-3/operations/op-42");
     assert_eq!(h.state["createTime"], "2026-01-01T00:00:00Z");
+}
+
+#[tokio::test]
+async fn submit_job_error_envelope_after_2xx_is_unsafe_to_retry() {
+    // Replaying an accepted predictLongRunning submit could start a second
+    // billed video job even when the embedded error code is a 4xx.
+    let t = MockTransport::new();
+    t.push(Response::Json(
+        200,
+        json!({"error": {"code": 429, "message": "quota exhausted", "status": "RESOURCE_EXHAUSTED"}}),
+    ));
+    let a = adapter(t);
+    let req = VideoRequest {
+        model: "veo-3".into(),
+        prompt: "waves at dusk".into(),
+        duration_secs: None,
+        extensions: Extensions::new(),
+    };
+    match a
+        .submit_job(JobOperation::Video(req), &RequestControl::default())
+        .await
+    {
+        Err(Error::Provider { status, retry, .. }) => {
+            assert_eq!(status, Some(429));
+            assert_eq!(retry, RetrySafety::Unsafe);
+        }
+        other => panic!("expected provider error, got {other:?}"),
+    }
 }
 
 #[tokio::test]
