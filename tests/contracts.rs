@@ -220,6 +220,10 @@ fn http_request_and_response_debug_redact_credentials() {
             http::HeaderValue::from_static(value),
         );
     }
+    request.headers.insert(
+        http::header::CONTENT_TYPE,
+        http::HeaderValue::from_static("application/json"),
+    );
     request.body = bytes::Bytes::from(format!(r#"{{"prompt":"{}"}}"#, common::run_token("request-body")));
     let debug = format!("{request:?}");
     for leaked in [
@@ -238,6 +242,7 @@ fn http_request_and_response_debug_redact_credentials() {
     assert!(debug.contains("api.example.test"), "{debug}");
     assert!(debug.contains("GET"), "{debug}");
     assert!(debug.contains("authorization"), "{debug}");
+    assert!(debug.contains("application/json"), "{debug}");
 
     let mut response = HttpResponse {
         status: http::StatusCode::UNAUTHORIZED,
@@ -248,6 +253,10 @@ fn http_request_and_response_debug_redact_credentials() {
         http::header::AUTHORIZATION,
         http::HeaderValue::from_str(&format!("Bearer {}", common::run_token("response-header"))).unwrap(),
     );
+    response.headers.insert(
+        http::header::CONTENT_TYPE,
+        http::HeaderValue::from_static("application/json"),
+    );
     let debug = format!("{response:?}");
     for leaked in [common::run_token("response-body"), common::run_token("response-header")] {
         assert!(
@@ -256,6 +265,7 @@ fn http_request_and_response_debug_redact_credentials() {
         );
     }
     assert!(debug.contains("401"), "{debug}");
+    assert!(debug.contains("application/json"), "{debug}");
 }
 
 #[test]

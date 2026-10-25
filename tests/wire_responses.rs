@@ -664,22 +664,30 @@ async fn bridge_stream_reuses_one_responses_encoder() {
     }
 
     // response.created, response.in_progress and response.completed all
-    // carry the response id; a second encoder instance would make the
-    // terminal id differ from the preamble id.
-    let response_ids: Vec<String> = frames
+    // identify the same Responses object; a second encoder instance would
+    // make the terminal id differ from the preamble id.
+    let data: Vec<Value> = frames
         .iter()
-        .filter_map(|frame| {
-            let data: Value = serde_json::from_str(&frame.data).unwrap();
-            data.pointer("/response/id")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
+        .map(|frame| serde_json::from_str(&frame.data).unwrap())
         .collect();
-    assert!(response_ids.len() >= 3, "{response_ids:?}");
-    assert!(
-        response_ids.windows(2).all(|pair| pair[0] == pair[1]),
-        "{response_ids:?}"
-    );
+    let response_id = |ty: &str| -> &str {
+        data.iter()
+            .find(|frame| frame["type"] == ty)
+            .and_then(|frame| frame.pointer("/response/id"))
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("missing {ty} response id in {data:?}"))
+    };
+    let created = response_id("response.created");
+    assert_eq!(created, response_id("response.in_progress"), "{data:?}");
+    assert_eq!(created, response_id("response.completed"), "{data:?}");
+    for frame in &data {
+        if let Some(id) = frame.pointer("/response/id").and_then(Value::as_str) {
+            assert_eq!(id, created, "response id changed in {frame}");
+        }
+        if let Some(id) = frame.get("response_id").and_then(Value::as_str) {
+            assert_eq!(id, created, "response_id changed in {frame}");
+        }
+    }
     assert_eq!(
         frames.last().unwrap().event.as_deref(),
         Some("response.completed")

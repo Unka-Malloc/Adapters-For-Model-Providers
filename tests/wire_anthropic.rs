@@ -474,6 +474,40 @@ fn finished_closes_open_blocks_before_message_stop() {
 }
 
 #[test]
+fn finished_stops_every_open_block_before_message_stop() {
+    let mut enc = stream_encoder(WireDialect::AnthropicMessages, "m");
+    let mut frames = enc.preamble();
+    // Two parts open; the canonical stream terminates without either
+    // PartFinished, as cross-dialect conversion can do.
+    for index in [0, 1] {
+        frames.extend(enc.encode(&StreamEvent::PartStarted {
+            index,
+            kind: PartKind::Text,
+        }));
+    }
+    frames.extend(enc.encode(&StreamEvent::Finished {
+        stop: Some(StopReason::Complete),
+    }));
+    frames.extend(enc.finish());
+
+    let starts: Vec<u64> = frames
+        .iter()
+        .filter(|frame| frame.event.as_deref() == Some("content_block_start"))
+        .filter_map(|frame| serde_json::from_str::<serde_json::Value>(&frame.data).ok())
+        .filter_map(|data| data["index"].as_u64())
+        .collect();
+    let stops: Vec<u64> = frames
+        .iter()
+        .filter(|frame| frame.event.as_deref() == Some("content_block_stop"))
+        .filter_map(|frame| serde_json::from_str::<serde_json::Value>(&frame.data).ok())
+        .filter_map(|data| data["index"].as_u64())
+        .collect();
+    assert_eq!(starts, [0, 1]);
+    assert_eq!(stops, [0, 1]);
+    assert_eq!(frames.last().unwrap().event.as_deref(), Some("message_stop"));
+}
+
+#[test]
 fn finish_closes_open_blocks_when_backend_ends_without_finished() {
     let mut enc = stream_encoder(WireDialect::AnthropicMessages, "m");
     enc.preamble();
