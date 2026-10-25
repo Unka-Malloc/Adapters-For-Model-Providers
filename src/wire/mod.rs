@@ -6,6 +6,7 @@
 //! into the canonical model so the host may run it through
 //! `Adapter::chat` against *any* backend, then encodes the canonical
 //! output and stream events back into the dialect the client spoke.
+//! Supported dialects are Chat Completions, Responses and Messages.
 //!
 //! Lossy edges are explicit: representable-but-imperfect mappings are
 //! recorded in `ConversionReport` (or accumulated on a stream encoder)
@@ -14,6 +15,7 @@
 
 mod anthropic_in;
 mod openai_in;
+pub(crate) mod responses_in;
 
 use serde_json::{Map, Value};
 
@@ -22,6 +24,7 @@ use crate::transport::SseEvent;
 
 pub use anthropic_in::AnthropicStreamEncoder;
 pub use openai_in::OpenAiStreamEncoder;
+pub use responses_in::ResponsesStreamEncoder;
 
 /// A client-facing wire dialect: the request/response shape a gateway
 /// caller used, independent of the backend protocol that serves it.
@@ -30,6 +33,8 @@ pub use openai_in::OpenAiStreamEncoder;
 pub enum WireDialect {
     /// OpenAI Chat Completions (`POST /chat/completions`).
     OpenAiChatCompletions,
+    /// OpenAI Responses (`POST /responses`).
+    OpenAiResponses,
     /// Anthropic Messages (`POST /v1/messages`).
     AnthropicMessages,
 }
@@ -39,6 +44,7 @@ impl WireDialect {
     pub fn protocol(self) -> Protocol {
         match self {
             WireDialect::OpenAiChatCompletions => Protocol::OpenAiChatCompletions,
+            WireDialect::OpenAiResponses => Protocol::OpenAiResponses,
             WireDialect::AnthropicMessages => Protocol::AnthropicMessages,
         }
     }
@@ -56,6 +62,7 @@ pub fn decode_chat_request(
 ) -> Result<(ChatRequest, ConversionReport), Error> {
     match dialect {
         WireDialect::OpenAiChatCompletions => openai_in::decode_request(body),
+        WireDialect::OpenAiResponses => responses_in::decode_request(body),
         WireDialect::AnthropicMessages => anthropic_in::decode_request(body),
     }
 }
@@ -72,6 +79,7 @@ pub fn encode_chat_output(
 ) -> (Value, ConversionReport) {
     match dialect {
         WireDialect::OpenAiChatCompletions => openai_in::encode_output(output, model),
+        WireDialect::OpenAiResponses => responses_in::encode_output(output, model),
         WireDialect::AnthropicMessages => anthropic_in::encode_output(output, model),
     }
 }
@@ -102,6 +110,7 @@ pub trait StreamEncoder: Send {
 pub fn stream_encoder(dialect: WireDialect, model: &str) -> Box<dyn StreamEncoder> {
     match dialect {
         WireDialect::OpenAiChatCompletions => Box::new(OpenAiStreamEncoder::new(model)),
+        WireDialect::OpenAiResponses => Box::new(ResponsesStreamEncoder::new(model)),
         WireDialect::AnthropicMessages => Box::new(AnthropicStreamEncoder::new(model)),
     }
 }

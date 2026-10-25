@@ -47,6 +47,7 @@ fn req(model: &str, text: &str) -> ChatRequest {
         messages: vec![Message::text(Role::User, text)],
         tools: vec![],
         tool_choice: None,
+        parallel_tool_calls: None,
         sampling: Sampling::default(),
         extensions: Extensions::default(),
     }
@@ -196,6 +197,7 @@ async fn main() {
         }],
         tools: vec![],
         tool_choice: None,
+        parallel_tool_calls: None,
         sampling: Sampling::default(),
         extensions: Extensions::default(),
     };

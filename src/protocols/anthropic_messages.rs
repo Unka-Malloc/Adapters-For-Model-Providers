@@ -40,8 +40,17 @@ pub fn build_request(req: &ChatRequest) -> Result<Value, Error> {
     if !req.tools.is_empty() {
         body.insert("tools".into(), encode_tools(&req.tools));
     }
-    if let Some(choice) = &req.tool_choice {
-        body.insert("tool_choice".into(), encode_tool_choice(choice));
+    match (&req.tool_choice, req.parallel_tool_calls) {
+        (Some(choice), parallel) => {
+            body.insert("tool_choice".into(), encode_tool_choice(choice, parallel));
+        }
+        (None, Some(false)) => {
+            body.insert(
+                "tool_choice".into(),
+                json!({ "type": "auto", "disable_parallel_tool_use": true }),
+            );
+        }
+        _ => {}
     }
     let s = &req.sampling;
     if let Some(t) = s.temperature {
@@ -282,13 +291,21 @@ fn encode_tools(tools: &[ToolDef]) -> Value {
         .collect()
 }
 
-fn encode_tool_choice(choice: &ToolChoice) -> Value {
-    match choice {
+fn encode_tool_choice(choice: &ToolChoice, parallel: Option<bool>) -> Value {
+    let mut value = match choice {
         ToolChoice::Auto => json!({ "type": "auto" }),
         ToolChoice::None => json!({ "type": "none" }),
         ToolChoice::Required => json!({ "type": "any" }),
         ToolChoice::Named(name) => json!({ "type": "tool", "name": name }),
+    };
+    if let Some(parallel) = parallel {
+        // `disable_parallel_tool_use` is only accepted with an active
+        // tool choice, never with `type: "none"`.
+        if !matches!(choice, ToolChoice::None) {
+            value["disable_parallel_tool_use"] = (!parallel).into();
+        }
     }
+    value
 }
 
 /// Decode a buffered Messages response.

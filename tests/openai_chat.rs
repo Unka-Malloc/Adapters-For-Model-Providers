@@ -72,6 +72,7 @@ async fn chat_request_maps_messages_tools_sampling_and_extensions() {
         strict: true,
     });
     req.tool_choice = Some(ToolChoice::Named("lookup".into()));
+    req.parallel_tool_calls = Some(false);
     req.sampling.temperature = Some(0.5);
     req.sampling.max_output_tokens = Some(64);
     req.extensions
@@ -95,6 +96,7 @@ async fn chat_request_maps_messages_tools_sampling_and_extensions() {
     );
     assert_eq!(b["messages"][3], json!({"role":"tool","tool_call_id":"call_1","content":"42"}));
     assert_eq!(b["tool_choice"]["function"]["name"], "lookup");
+    assert_eq!(b["parallel_tool_calls"], false);
     assert_eq!(b["temperature"], 0.5);
     assert_eq!(b["max_completion_tokens"], 64);
     assert_eq!(b["service_tier"], "flex");

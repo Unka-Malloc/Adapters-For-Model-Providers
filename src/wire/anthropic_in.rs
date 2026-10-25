@@ -361,7 +361,13 @@ fn decode_tool_choice(choice: Option<&Value>, req: &mut ChatRequest, report: &mu
         Some(c) => req.tool_choice = Some(c),
         None => loss(report, LossKind::Unsupported, "request.tool_choice"),
     }
-    for key in extra_keys(obj, &["type", "name"]) {
+    if let Some(disabled) = obj
+        .get("disable_parallel_tool_use")
+        .and_then(Value::as_bool)
+    {
+        req.parallel_tool_calls = Some(!disabled);
+    }
+    for key in extra_keys(obj, &["type", "name", "disable_parallel_tool_use"]) {
         loss(report, LossKind::Lossy, format!("tool_choice.{key}"));
     }
 }

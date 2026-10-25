@@ -135,6 +135,8 @@ fn server_tools_and_unknown_fields_report_not_silent() {
 
     assert_eq!(req.tools.len(), 1);
     assert!(matches!(req.tool_choice, Some(ToolChoice::Auto)));
+    // `disable_parallel_tool_use` is canonical, not a loss.
+    assert_eq!(req.parallel_tool_calls, Some(false));
     assert_eq!(req.extensions["top_k"], 40);
     assert_eq!(req.extensions["metadata"]["user_id"], "u1");
     assert_eq!(req.extensions["thinking"]["budget_tokens"], 1024);
@@ -146,7 +148,6 @@ fn server_tools_and_unknown_fields_report_not_silent() {
     for expected in [
         "system[1]",
         "tools[1]",
-        "tool_choice.disable_parallel_tool_use",
         "request.top_k",
         "request.metadata",
         "request.thinking",

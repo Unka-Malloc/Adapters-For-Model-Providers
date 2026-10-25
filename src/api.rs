@@ -300,6 +300,10 @@ pub struct ChatRequest {
     pub messages: Vec<Message>,
     pub tools: Vec<ToolDef>,
     pub tool_choice: Option<ToolChoice>,
+    /// Whether the provider may fan the request out into parallel tool
+    /// calls. Maps to Chat/Responses `parallel_tool_calls` and Anthropic
+    /// `tool_choice.disable_parallel_tool_use`.
+    pub parallel_tool_calls: Option<bool>,
     pub sampling: Sampling,
     pub extensions: Extensions,
 }

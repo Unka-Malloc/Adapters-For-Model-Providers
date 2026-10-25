@@ -66,6 +66,9 @@ pub fn decode_request(body: &[u8]) -> Result<(ChatRequest, ConversionReport), Er
         }
     }
     decode_tool_choice(obj.get("tool_choice"), &mut req, &mut report);
+    if let Some(parallel) = obj.get("parallel_tool_calls").and_then(Value::as_bool) {
+        req.parallel_tool_calls = Some(parallel);
+    }
     if req.tool_choice.is_none() {
         // Legacy `function_call` is the pre-tools tool choice.
         if let Some(fc) = obj.get("function_call") {
@@ -97,6 +100,7 @@ pub fn decode_request(body: &[u8]) -> Result<(ChatRequest, ConversionReport), Er
         "max_completion_tokens",
         "stop",
         "stream",
+        "parallel_tool_calls",
     ];
     for (k, val) in obj {
         if !CLAIMED.contains(&k.as_str()) {

@@ -26,6 +26,9 @@ pub fn build_request(req: &ChatRequest) -> Result<Value, Error> {
     if let Some(choice) = &req.tool_choice {
         body.insert("tool_choice".into(), encode_tool_choice(choice));
     }
+    if let Some(parallel) = req.parallel_tool_calls {
+        body.insert("parallel_tool_calls".into(), parallel.into());
+    }
     let s = &req.sampling;
     if let Some(t) = s.temperature {
         body.insert("temperature".into(), t.into());
@@ -352,6 +355,10 @@ impl crate::transport::SseEventDecoder for ResponsesStreamDecoder {
             .as_deref()
             .or_else(|| v["type"].as_str())
             .unwrap_or_default();
+        // Envelopes and done-mirrors carry no new canonical output.
+        if crate::wire::responses_in::is_structural_event(ty) {
+            return Ok(Vec::new());
+        }
         let mut out = Vec::new();
         match ty {
             "response.output_item.added" => {

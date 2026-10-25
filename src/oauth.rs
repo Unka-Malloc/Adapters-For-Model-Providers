@@ -9,7 +9,7 @@
 use std::time::{Duration, SystemTime};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use rand::RngCore;
+use rand::TryRngCore;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -78,7 +78,9 @@ pub struct DeviceGrant {
 
 fn random_url_safe(bytes: usize) -> String {
     let mut buf = vec![0u8; bytes];
-    rand::rngs::OsRng.fill_bytes(&mut buf);
+    rand::rngs::OsRng
+        .try_fill_bytes(&mut buf)
+        .expect("OsRng is infallible");
     URL_SAFE_NO_PAD.encode(buf)
 }
 

@@ -39,6 +39,7 @@ fn decodes_messages_tools_sampling_and_extensions() {
                          "parameters": {"type": "object"}, "strict": true}
         }],
         "tool_choice": {"type": "function", "function": {"name": "lookup"}},
+        "parallel_tool_calls": false,
         "temperature": 0.5,
         "max_completion_tokens": 64,
         "stop": ["END", "\n\n"]
@@ -74,6 +75,7 @@ fn decodes_messages_tools_sampling_and_extensions() {
     assert_eq!(req.tools[0].name, "lookup");
     assert!(req.tools[0].strict);
     assert!(matches!(req.tool_choice, Some(ToolChoice::Named(ref n)) if n == "lookup"));
+    assert_eq!(req.parallel_tool_calls, Some(false));
     assert_eq!(req.sampling.temperature, Some(0.5));
     assert_eq!(req.sampling.max_output_tokens, Some(64));
     assert_eq!(req.sampling.stop, ["END", "\n\n"]);
@@ -388,6 +390,7 @@ fn round_trip_request_is_identity_on_representable_inputs() {
                          "parameters": {"type": "object"}, "strict": false}
         }],
         "tool_choice": "auto",
+        "parallel_tool_calls": true,
         "temperature": 0.5,
         "max_tokens": 64,
         "stop": ["END"]
@@ -402,6 +405,7 @@ fn round_trip_request_is_identity_on_representable_inputs() {
     assert_eq!(out["messages"], messages);
     assert_eq!(out["tools"], body["tools"]);
     assert_eq!(out["tool_choice"], "auto");
+    assert_eq!(out["parallel_tool_calls"], true);
     assert_eq!(out["temperature"], 0.5);
     assert_eq!(out["max_completion_tokens"], 64);
     assert_eq!(out["stop"], json!(["END"]));

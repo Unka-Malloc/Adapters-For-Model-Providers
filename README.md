@@ -13,7 +13,7 @@ risk to provider integrations.
 
 ```toml
 [dependencies]
-a4mp = { version = "0.1", features = ["reqwest-transport"] }
+a4mp = { version = "0.2", features = ["reqwest-transport"] }
 ```
 
 ## What it is
@@ -36,9 +36,10 @@ a4mp = { version = "0.1", features = ["reqwest-transport"] }
   Cloudflare account IDs, OCI regions). Provider identity is open-ended;
   any `Protocol`-registered family and any `bind_target` endpoint works.
 - **Optional inbound wire conversion.** Gateway consumers can accept
-  client requests already shaped like OpenAI Chat Completions or
-  Anthropic Messages, run them through *any* backend adapter, and answer
-  in the dialect the client spoke — via `WireBridge`.
+  client requests already shaped like OpenAI Chat Completions, OpenAI
+  Responses or Anthropic Messages, run them through *any* backend
+  adapter, and answer in the dialect the client spoke — via
+  `WireBridge`.
 
 ## What it is not
 

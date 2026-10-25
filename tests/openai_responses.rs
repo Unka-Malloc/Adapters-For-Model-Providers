@@ -71,6 +71,7 @@ async fn responses_request_builds_input_items_and_tools() {
         parameters: json!({}),
         strict: false,
     });
+    req.parallel_tool_calls = Some(false);
     req.extensions.insert("reasoning".into(), json!({"effort": "high"}));
 
     a.chat(req, &RequestControl::default()).await.unwrap();
@@ -85,6 +86,7 @@ async fn responses_request_builds_input_items_and_tools() {
     assert_eq!(input[4], json!({"type":"function_call","call_id":"call_1","name":"f","arguments":"{\"a\":1}"}));
     assert_eq!(input[5], json!({"type":"function_call_output","call_id":"call_1","output":"ok"}));
     assert_eq!(b["tools"][0]["type"], "function");
+    assert_eq!(b["parallel_tool_calls"], false);
     assert_eq!(b["reasoning"], json!({"effort": "high"}));
 }
 

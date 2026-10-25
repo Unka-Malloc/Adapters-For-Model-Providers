@@ -107,6 +107,7 @@ async fn chat_request_maps_system_media_thinking_tools_and_extensions() {
         strict: true,
     });
     req.tool_choice = Some(ToolChoice::Named("lookup".into()));
+    req.parallel_tool_calls = Some(false);
     req.sampling.temperature = Some(0.5);
     req.sampling.max_output_tokens = Some(512);
     req.sampling.stop = vec!["END".into()];
@@ -170,7 +171,10 @@ async fn chat_request_maps_system_media_thinking_tools_and_extensions() {
             "input_schema": {"type": "object", "properties": {"q": {"type": "string"}}},
         })
     );
-    assert_eq!(b["tool_choice"], json!({"type": "tool", "name": "lookup"}));
+    assert_eq!(
+        b["tool_choice"],
+        json!({"type": "tool", "name": "lookup", "disable_parallel_tool_use": true})
+    );
     assert_eq!(b["temperature"], 0.5);
     assert_eq!(b["stop_sequences"], json!(["END"]));
     assert_eq!(b["metadata"]["user_id"], "u-9");
@@ -222,6 +226,46 @@ fn tool_choice_maps_to_wire_types() {
         let body = am::build_request(&req).unwrap();
         assert_eq!(body["tool_choice"], expect);
     }
+}
+
+#[test]
+fn parallel_tool_calls_maps_to_disable_parallel_tool_use() {
+    // No explicit choice: the codec still emits the auto choice to carry
+    // the parallel constraint.
+    let req = ChatRequest {
+        parallel_tool_calls: Some(false),
+        ..Default::default()
+    };
+    let body = am::build_request(&req).unwrap();
+    assert_eq!(
+        body["tool_choice"],
+        json!({"type": "auto", "disable_parallel_tool_use": true})
+    );
+
+    // An explicit choice carries the inverse flag.
+    let req = ChatRequest {
+        tool_choice: Some(ToolChoice::Auto),
+        parallel_tool_calls: Some(true),
+        ..Default::default()
+    };
+    let body = am::build_request(&req).unwrap();
+    assert_eq!(
+        body["tool_choice"],
+        json!({"type": "auto", "disable_parallel_tool_use": false})
+    );
+
+    // `type: "none"` forbids tool calls, so there is nothing to constrain.
+    let req = ChatRequest {
+        tool_choice: Some(ToolChoice::None),
+        parallel_tool_calls: Some(false),
+        ..Default::default()
+    };
+    let body = am::build_request(&req).unwrap();
+    assert_eq!(body["tool_choice"], json!({"type": "none"}));
+
+    // Unset stays unset.
+    let body = am::build_request(&ChatRequest::default()).unwrap();
+    assert!(body.get("tool_choice").is_none());
 }
 
 #[tokio::test]
