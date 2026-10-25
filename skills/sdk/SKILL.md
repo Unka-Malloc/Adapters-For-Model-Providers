@@ -27,11 +27,11 @@ let (body, encode_report) =
 
 // Streaming: SseEventDecoder → StreamEvent → StreamEncoder.
 let mut encoder = a4mp::wire::stream_encoder(in_dialect, &req.model);
+let mut frames = encoder.preamble();
 for event in upstream_decoder.decode(&sse_event)? {
-    for frame in encoder.encode(&event) {
-        // serialize frame as event:/data: lines
-    }
+    frames.extend(encoder.encode(&event));
 }
+frames.extend(encoder.finish());   // terminator frame(s)
 ```
 
 ## Rules that keep the contract

@@ -323,8 +323,9 @@ fn decode_usage_responses(u: &Value) -> Usage {
 pub struct ResponsesStreamDecoder {
     parts: HashMap<u64, u32>,
     next_part: u32,
-    /// Parts that already received incremental deltas. Terminal `.done`
-    /// events only backfill a part when no deltas were observed.
+    /// Parts that received a non-empty incremental delta. A terminal
+    /// `.done`/item payload backfills a part only when no non-empty delta
+    /// was observed.
     text_seen: HashSet<u32>,
     reasoning_seen: HashSet<u32>,
     args_seen: HashSet<u32>,
@@ -394,6 +395,34 @@ impl ResponsesStreamDecoder {
     }
 }
 
+/// Canonical part kind for a Responses item object.
+fn part_kind(item: &Value) -> PartKind {
+    match item["type"].as_str() {
+        Some("function_call") => PartKind::ToolCall,
+        Some("reasoning") => PartKind::Reasoning,
+        Some("message") => PartKind::Text,
+        _ => PartKind::Other,
+    }
+}
+
+/// Tool identity from an added or terminal `function_call` item.
+fn tool_started(part: u32, item: &Value) -> StreamEvent {
+    StreamEvent::ToolCallStarted {
+        index: part,
+        id: item
+            .get("call_id")
+            .and_then(Value::as_str)
+            .or_else(|| item.get("id").and_then(Value::as_str))
+            .unwrap_or_default()
+            .to_owned(),
+        name: item
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+    }
+}
+
 impl crate::transport::SseEventDecoder for ResponsesStreamDecoder {
     fn decode(&mut self, event: &SseEvent) -> Result<Vec<StreamEvent>, Error> {
         if event.data.trim().is_empty() {
@@ -418,33 +447,21 @@ impl crate::transport::SseEventDecoder for ResponsesStreamDecoder {
             | "response.reasoning_summary_part.done" => {}
             "response.output_item.added" => {
                 let idx = v["output_index"].as_u64().unwrap_or(0);
-                let kind = match v["item"]["type"].as_str() {
-                    Some("function_call") => PartKind::ToolCall,
-                    Some("reasoning") => PartKind::Reasoning,
-                    Some("message") => PartKind::Text,
-                    _ => PartKind::Other,
-                };
+                let item = &v["item"];
+                let kind = part_kind(item);
                 let (part, started) = self.part(idx, kind);
                 if let Some(ev) = started {
                     out.push(ev);
                 }
-                if let (PartKind::ToolCall, Some(item)) = (kind, v.get("item")) {
+                if kind == PartKind::ToolCall {
                     self.tools_started.insert(part);
-                    out.push(StreamEvent::ToolCallStarted {
-                        index: part,
-                        id: item["call_id"]
-                            .as_str()
-                            .or(item["id"].as_str())
-                            .unwrap_or_default()
-                            .to_owned(),
-                        name: item["name"].as_str().unwrap_or_default().to_owned(),
-                    });
+                    out.push(tool_started(part, item));
                 }
             }
             "response.output_text.delta" | "response.refusal.delta" => {
                 let idx = v["output_index"].as_u64().unwrap_or(0);
                 let part = self.part_or_start(idx, PartKind::Text, &mut out);
-                if let Some(text) = v["delta"].as_str() {
+                if let Some(text) = v["delta"].as_str().filter(|text| !text.is_empty()) {
                     self.text_seen.insert(part);
                     out.push(StreamEvent::TextDelta {
                         index: part,
@@ -467,7 +484,7 @@ impl crate::transport::SseEventDecoder for ResponsesStreamDecoder {
             "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
                 let idx = v["output_index"].as_u64().unwrap_or(0);
                 let part = self.part_or_start(idx, PartKind::Reasoning, &mut out);
-                if let Some(text) = v["delta"].as_str() {
+                if let Some(text) = v["delta"].as_str().filter(|text| !text.is_empty()) {
                     self.reasoning_seen.insert(part);
                     out.push(StreamEvent::ReasoningDelta {
                         index: part,
@@ -485,7 +502,7 @@ impl crate::transport::SseEventDecoder for ResponsesStreamDecoder {
             "response.function_call_arguments.delta" => {
                 let idx = v["output_index"].as_u64().unwrap_or(0);
                 let part = self.part_or_start(idx, PartKind::ToolCall, &mut out);
-                if let Some(args) = v["delta"].as_str() {
+                if let Some(args) = v["delta"].as_str().filter(|args| !args.is_empty()) {
                     self.args_seen.insert(part);
                     out.push(StreamEvent::ToolCallDelta {
                         index: part,
@@ -503,12 +520,7 @@ impl crate::transport::SseEventDecoder for ResponsesStreamDecoder {
             "response.output_item.done" => {
                 let idx = v["output_index"].as_u64().unwrap_or(0);
                 let item = &v["item"];
-                let kind = match item["type"].as_str() {
-                    Some("function_call") => PartKind::ToolCall,
-                    Some("reasoning") => PartKind::Reasoning,
-                    Some("message") => PartKind::Text,
-                    _ => PartKind::Other,
-                };
+                let kind = part_kind(item);
                 let part = match self.parts.get(&idx).copied() {
                     Some(part) => part,
                     None => self.part_or_start(idx, kind, &mut out),
@@ -551,20 +563,7 @@ impl crate::transport::SseEventDecoder for ResponsesStreamDecoder {
                         // A terminal item may be the only place identity or
                         // arguments appear (no `added`/delta frames).
                         if self.tools_started.insert(part) {
-                            out.push(StreamEvent::ToolCallStarted {
-                                index: part,
-                                id: item
-                                    .get("call_id")
-                                    .and_then(Value::as_str)
-                                    .or_else(|| item.get("id").and_then(Value::as_str))
-                                    .unwrap_or_default()
-                                    .to_owned(),
-                                name: item
-                                    .get("name")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or_default()
-                                    .to_owned(),
-                            });
+                            out.push(tool_started(part, item));
                         }
                         if let Some(args) = item["arguments"].as_str() {
                             self.args_fallback(part, args, &mut out);

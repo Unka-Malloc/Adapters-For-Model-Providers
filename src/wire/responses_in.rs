@@ -95,7 +95,6 @@ pub fn decode_request(body: &[u8]) -> Result<(ChatRequest, ConversionReport), Er
         "temperature",
         "top_p",
         "max_output_tokens",
-        "stop",
         "stream",
     ];
     for (k, val) in obj {
@@ -504,10 +503,8 @@ fn decode_sampling(obj: &Map<String, Value>, req: &mut ChatRequest, report: &mut
             None => {}
         }
     }
-    if let Some(v) = obj.get("stop") {
-        // Responses has no stop-sequences field.
-        preserve_extension(&mut req.extensions, report, "stop", v.clone());
-    }
+    // Fields with no Responses home (`stop`, …) are preserved by the
+    // caller's unclaimed-field loop, which also reports the one loss.
 }
 
 // ---------------------------------------------------------------------------

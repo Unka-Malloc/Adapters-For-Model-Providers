@@ -23,9 +23,11 @@ let (client_body, encode_report) =
 // Streaming: upstream decoder → canonical StreamEvent → client encoder.
 let events: Vec<a4mp::StreamEvent> = upstream_decoder.decode(&sse_event)?;
 let mut client_encoder = a4mp::wire::stream_encoder(dialect, &request.model);
+let mut frames = client_encoder.preamble();
 for event in &events {
-    let frames = client_encoder.encode(event);   // → client SSE frames
+    frames.extend(client_encoder.encode(event));   // → client SSE frames
 }
+frames.extend(client_encoder.finish());            // terminator frame(s)
 ```
 
 Layers, top to bottom (depend only on what you use):
@@ -35,7 +37,7 @@ Layers, top to bottom (depend only on what you use):
   `RequestControl` still links tokio-util's cancellation token.
 - `protocols` — upstream provider request builders + response/stream
   decoders for Chat, Responses and Anthropic.
-- `transport` + `credentials` — optional async adapter layer (`Adapter`,
+- `transport` + `auth` — optional async adapter layer (`Adapter`,
   `Transport`, `CredentialResolver`) for hosts that don't bring their own.
 
 ## Skills

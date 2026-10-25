@@ -329,3 +329,101 @@ fn stream_done_only_refusal_text_is_preserved() {
         .collect();
     assert_eq!(text, "cannot help");
 }
+
+#[test]
+fn stream_empty_delta_does_not_suppress_done_payload() {
+    let frames = vec![
+        frame(
+            "response.output_item.added",
+            json!({"output_index": 0, "item": {"type": "message", "id": "msg_1"}}),
+        ),
+        frame(
+            "response.output_text.delta",
+            json!({"output_index": 0, "delta": ""}),
+        ),
+        frame(
+            "response.output_text.done",
+            json!({"output_index": 0, "text": "real payload"}),
+        ),
+        frame(
+            "response.completed",
+            json!({"response": {"status": "completed"}}),
+        ),
+    ];
+    let events = decode_frames(&frames);
+    let text: String = events
+        .iter()
+        .filter_map(|e| match e {
+            StreamEvent::TextDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "real payload");
+}
+
+#[test]
+fn stream_item_done_only_function_call_keeps_identity_and_arguments() {
+    let frames = vec![
+        frame(
+            "response.output_item.done",
+            json!({"output_index": 0, "item": {
+                "type": "function_call", "call_id": "call_7", "name": "lookup",
+                "arguments": "{\"a\":1}"}}),
+        ),
+        frame(
+            "response.completed",
+            json!({"response": {"status": "completed"}}),
+        ),
+    ];
+    let events = decode_frames(&frames);
+
+    assert!(matches!(
+        &events[0],
+        StreamEvent::PartStarted { index: 0, kind: PartKind::ToolCall }
+    ));
+    assert!(matches!(
+        &events[1],
+        StreamEvent::ToolCallStarted { index: 0, id, name }
+            if id == "call_7" && name == "lookup"
+    ));
+    let args: String = events
+        .iter()
+        .filter_map(|e| match e {
+            StreamEvent::ToolCallDelta { arguments, .. } => Some(arguments.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(args, "{\"a\":1}");
+    assert!(events.iter().any(|e| matches!(e, StreamEvent::PartFinished { index: 0 })));
+}
+
+#[test]
+fn stream_reasoning_done_only_keeps_text() {
+    let frames = vec![
+        frame(
+            "response.output_item.done",
+            json!({"output_index": 0, "item": {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "thought"}]}}),
+        ),
+        frame(
+            "response.completed",
+            json!({"response": {"status": "completed"}}),
+        ),
+    ];
+    let events = decode_frames(&frames);
+
+    assert!(matches!(
+        &events[0],
+        StreamEvent::PartStarted { index: 0, kind: PartKind::Reasoning }
+    ));
+    let reasoning: String = events
+        .iter()
+        .filter_map(|e| match e {
+            StreamEvent::ReasoningDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reasoning, "thought");
+    assert!(events.iter().any(|e| matches!(e, StreamEvent::PartFinished { index: 0 })));
+}
