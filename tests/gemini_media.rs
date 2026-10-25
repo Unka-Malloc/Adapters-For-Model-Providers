@@ -25,7 +25,9 @@ fn adapter(transport: MockTransport) -> GeminiAdapter {
         target,
         AuthKind::ApiKey,
         Arc::new(transport),
-        Arc::new(StaticCredential(Credential::ApiKey(Secret::new(common::run_token("api-key"))))),
+        Arc::new(StaticCredential(Credential::ApiKey(Secret::new(
+            common::run_token("api-key"),
+        )))),
     )
     .unwrap()
 }
@@ -76,11 +78,11 @@ async fn image_predict_maps_instance_parameters_and_decodes_media() {
     let out = a.image(req, &RequestControl::default()).await.unwrap();
 
     let rec = &t.recorded()[0];
+    assert_eq!(rec.url.path(), "/v1beta/models/imagen-3.0-generate:predict");
     assert_eq!(
-        rec.url.path(),
-        "/v1beta/models/imagen-3.0-generate:predict"
+        rec.headers.get("x-goog-api-key").unwrap(),
+        common::run_token("api-key")
     );
-    assert_eq!(rec.headers.get("x-goog-api-key").unwrap(), common::run_token("api-key"));
     let b = body_json(rec);
     // The prompt is the single instance; `instance` merges into it.
     assert_eq!(
@@ -106,7 +108,10 @@ async fn image_predict_maps_instance_parameters_and_decodes_media() {
     }
     // Unclaimed wire fields stay inspectable.
     assert_eq!(out.extensions["modelVersion"], "imagen-3.0-001");
-    assert_eq!(out.extensions["predictions"][1]["raiFilteredReason"], "none");
+    assert_eq!(
+        out.extensions["predictions"][1]["raiFilteredReason"],
+        "none"
+    );
 }
 
 #[tokio::test]
@@ -138,8 +143,7 @@ fn decode_image_output_roundtrips_predictions() {
             {"bytesBase64Encoded": "aGk=", "mimeType": "image/jpeg"},
         ],
     });
-    let out =
-        gemini_media_codec::decode_image_output(&serde_json::to_vec(&body).unwrap()).unwrap();
+    let out = gemini_media_codec::decode_image_output(&serde_json::to_vec(&body).unwrap()).unwrap();
     match &out.media[0] {
         MediaSource::Inline { media_type, data } => {
             assert_eq!(media_type, "image/jpeg");
@@ -240,7 +244,8 @@ async fn non_object_instance_extension_is_rejected() {
         size: None,
         extensions: Extensions::new(),
     };
-    req.extensions.insert("instance".into(), json!("not-an-object"));
+    req.extensions
+        .insert("instance".into(), json!("not-an-object"));
     let err = a.image(req, &RequestControl::default()).await.unwrap_err();
     assert!(matches!(err, Error::Unsupported(_)));
     assert!(t.recorded().is_empty(), "no request should be sent");
@@ -269,7 +274,8 @@ async fn submit_job_posts_predict_long_running_and_returns_handle() {
         extensions: Extensions::new(),
     };
     req.extensions.insert("aspectRatio".into(), json!("9:16"));
-    req.extensions.insert("negativePrompt".into(), json!("people"));
+    req.extensions
+        .insert("negativePrompt".into(), json!("people"));
     // A starting frame rides `instance.image` in the wire's inlineData
     // blob shape.
     req.extensions.insert(
@@ -284,10 +290,7 @@ async fn submit_job_posts_predict_long_running_and_returns_handle() {
 
     let rec = &t.recorded()[0];
     assert_eq!(rec.method, http::Method::POST);
-    assert_eq!(
-        rec.url.path(),
-        "/v1beta/models/veo-3:predictLongRunning"
-    );
+    assert_eq!(rec.url.path(), "/v1beta/models/veo-3:predictLongRunning");
     let b = body_json(rec);
     assert_eq!(b["instances"][0]["prompt"], "waves at dusk");
     assert_eq!(
@@ -386,10 +389,7 @@ async fn job_state_polls_operation_and_maps_lifecycle() {
                 result.files[0].id,
                 "https://files.test/v1beta/files/9:download?alt=media"
             );
-            assert_eq!(
-                result.files[0].purpose.as_deref(),
-                Some("generated_video")
-            );
+            assert_eq!(result.files[0].purpose.as_deref(), Some("generated_video"));
             // The native response payload stays inspectable verbatim.
             assert_eq!(
                 result.output["generateVideoResponse"]["generatedSamples"]

@@ -16,9 +16,7 @@ use serde_json::{Value, json};
 use crate::api::*;
 use crate::auth::{AuthKind, Credential, CredentialResolver, CredentialScope};
 use crate::effects::{EffectHost, ResourceRef};
-use crate::protocols::{
-    openai_chat, openai_data, openai_media, openai_realtime, openai_responses,
-};
+use crate::protocols::{openai_chat, openai_data, openai_media, openai_realtime, openai_responses};
 use crate::transport::{DuplexChannel, EventStream, HttpRequest, Transport};
 
 /// Adapter for the OpenAI protocol family (Chat Completions + Responses).
@@ -72,8 +70,9 @@ impl OpenAiAdapter {
             Credential::ApiKey(secret) | Credential::Bearer { token: secret, .. } => {
                 headers.insert(
                     http::header::AUTHORIZATION,
-                    http::HeaderValue::from_str(&format!("Bearer {}", secret.expose()))
-                        .map_err(|_| Error::Credential("credential is not a valid header value".into()))?,
+                    http::HeaderValue::from_str(&format!("Bearer {}", secret.expose())).map_err(
+                        |_| Error::Credential("credential is not a valid header value".into()),
+                    )?,
                 );
             }
             Credential::Cloud { .. } => {
@@ -87,7 +86,11 @@ impl OpenAiAdapter {
 
     /// Resolve `MediaSource::Resource` parts into inline data through the
     /// host effect port before the request enters the codec.
-    async fn resolve_media(&self, req: &mut ChatRequest, ctrl: &RequestControl) -> Result<(), Error> {
+    async fn resolve_media(
+        &self,
+        req: &mut ChatRequest,
+        ctrl: &RequestControl,
+    ) -> Result<(), Error> {
         let needs_resolve = req.messages.iter().any(|m| {
             m.content.iter().any(|p| {
                 matches!(
@@ -108,7 +111,10 @@ impl OpenAiAdapter {
             .ok_or_else(|| Error::Unsupported("media resources need a host effect port".into()))?;
         for m in &mut req.messages {
             for part in &mut m.content {
-                if let ContentPart::Media { kind: _, source, .. } = part {
+                if let ContentPart::Media {
+                    kind: _, source, ..
+                } = part
+                {
                     if let MediaSource::Resource(id) = source {
                         let mut rr = ResourceRef {
                             id: id.clone(),
@@ -137,10 +143,9 @@ impl OpenAiAdapter {
         ctrl: &RequestControl,
     ) -> Result<(), Error> {
         if let MediaSource::Resource(id) = source {
-            let effects = self
-                .effects
-                .as_ref()
-                .ok_or_else(|| Error::Unsupported("media resources need a host effect port".into()))?;
+            let effects = self.effects.as_ref().ok_or_else(|| {
+                Error::Unsupported("media resources need a host effect port".into())
+            })?;
             let mut rr = ResourceRef {
                 id: id.clone(),
                 media_type: None,
@@ -202,8 +207,7 @@ impl OpenAiAdapter {
             // Drain the error body before building the error.
             let mut body = Vec::new();
             let mut stream = res.body;
-            while let Some(chunk) = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await
-            {
+            while let Some(chunk) = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await {
                 match chunk {
                     Ok(b) => body.extend_from_slice(&b),
                     Err(e) => return Err(e),
@@ -238,7 +242,8 @@ impl Adapter for OpenAiAdapter {
         match self.target.protocol {
             Protocol::OpenAiChatCompletions => {
                 let body = openai_chat::build_request(&req)?;
-                let mut http = HttpRequest::post_json(self.target.endpoint("chat/completions"), body);
+                let mut http =
+                    HttpRequest::post_json(self.target.endpoint("chat/completions"), body);
                 for (k, v) in headers.iter() {
                     http.headers.append(k, v.clone());
                 }
@@ -271,10 +276,12 @@ impl Adapter for OpenAiAdapter {
             Protocol::OpenAiChatCompletions => {
                 let mut body = openai_chat::build_request(&req)?;
                 body["stream"] = json!(true);
-                body.as_object_mut().unwrap().entry("stream_options".to_owned()).or_insert_with(|| {
-                    json!({"include_usage": true})
-                });
-                let mut http = HttpRequest::post_json(self.target.endpoint("chat/completions"), body);
+                body.as_object_mut()
+                    .unwrap()
+                    .entry("stream_options".to_owned())
+                    .or_insert_with(|| json!({"include_usage": true}));
+                let mut http =
+                    HttpRequest::post_json(self.target.endpoint("chat/completions"), body);
                 for (k, v) in headers.iter() {
                     http.headers.append(k, v.clone());
                 }
@@ -362,8 +369,7 @@ impl Adapter for OpenAiAdapter {
                     format.as_deref(),
                     &extensions,
                 )?;
-                let mut http =
-                    HttpRequest::post_json(self.target.endpoint("audio/speech"), body);
+                let mut http = HttpRequest::post_json(self.target.endpoint("audio/speech"), body);
                 for (k, v) in headers.iter() {
                     http.headers.append(k, v.clone());
                 }
@@ -390,7 +396,8 @@ impl Adapter for OpenAiAdapter {
                     MediaSource::Inline { media_type, data } => (data, media_type),
                     MediaSource::Url(_) => {
                         return Err(Error::Unsupported(
-                            "OpenAI transcription uploads audio bytes; fetch remote audio first".into(),
+                            "OpenAI transcription uploads audio bytes; fetch remote audio first"
+                                .into(),
                         ));
                     }
                     MediaSource::Resource(_) => {
@@ -419,15 +426,20 @@ impl Adapter for OpenAiAdapter {
     /// `purpose=batch`) then create the batch (`POST /batches`). Chat
     /// and Embed operations map onto their `/v1/` endpoints; `Custom`
     /// carries an explicit `/v1/…` endpoint path plus body.
-    async fn submit_job(&self, op: JobOperation, ctrl: &RequestControl) -> Result<JobHandle, Error> {
+    async fn submit_job(
+        &self,
+        op: JobOperation,
+        ctrl: &RequestControl,
+    ) -> Result<JobHandle, Error> {
         let (endpoint, body) = match &op {
             JobOperation::Chat(req) => (
                 "/v1/chat/completions".to_owned(),
                 openai_chat::build_request(req)?,
             ),
-            JobOperation::Embed(req) => {
-                ("/v1/embeddings".to_owned(), openai_data::build_embed_request(req)?)
-            }
+            JobOperation::Embed(req) => (
+                "/v1/embeddings".to_owned(),
+                openai_data::build_embed_request(req)?,
+            ),
             JobOperation::Custom { kind, payload } if kind.starts_with("/v1/") => {
                 (kind.clone(), payload.clone())
             }
@@ -481,7 +493,11 @@ impl Adapter for OpenAiAdapter {
 
     /// `GET /batches/{id}` → canonical job state. A completed batch's
     /// output file (`GET /files/{id}/content`) parses as JSONL rows.
-    async fn job_state(&self, handle: &JobHandle, ctrl: &RequestControl) -> Result<JobState, Error> {
+    async fn job_state(
+        &self,
+        handle: &JobHandle,
+        ctrl: &RequestControl,
+    ) -> Result<JobState, Error> {
         let headers = self.authenticate().await?;
         let mut http = HttpRequest::get(self.target.endpoint(&format!("batches/{}", handle.id)));
         for (k, v) in headers.iter() {
@@ -495,9 +511,8 @@ impl Adapter for OpenAiAdapter {
             "completed" => {
                 let mut result = JobResult::default();
                 if let Some(file_id) = &batch.output_file_id {
-                    let mut http = HttpRequest::get(
-                        self.target.endpoint(&format!("files/{file_id}/content")),
-                    );
+                    let mut http =
+                        HttpRequest::get(self.target.endpoint(&format!("files/{file_id}/content")));
                     for (k, v) in headers.iter() {
                         http.headers.append(k, v.clone());
                     }
@@ -517,12 +532,17 @@ impl Adapter for OpenAiAdapter {
                     .first()
                     .map(|(c, m)| (c.clone().or_else(|| Some(batch.status.clone())), m.clone()))
                     .unwrap_or_else(|| {
-                        (Some(batch.status.clone()), format!("batch {}", batch.status))
+                        (
+                            Some(batch.status.clone()),
+                            format!("batch {}", batch.status),
+                        )
                     });
                 Ok(JobState::Failed { code, message })
             }
             "cancelled" => Ok(JobState::Cancelled),
-            other => Err(Error::UpstreamProtocol(format!("unknown batch status {other:?}"))),
+            other => Err(Error::UpstreamProtocol(format!(
+                "unknown batch status {other:?}"
+            ))),
         }
     }
 
@@ -530,7 +550,8 @@ impl Adapter for OpenAiAdapter {
     async fn cancel_job(&self, handle: &JobHandle, ctrl: &RequestControl) -> Result<(), Error> {
         let headers = self.authenticate().await?;
         let mut http = HttpRequest::post_json(
-            self.target.endpoint(&format!("batches/{}/cancel", handle.id)),
+            self.target
+                .endpoint(&format!("batches/{}/cancel", handle.id)),
             json!({}),
         );
         for (k, v) in headers.iter() {
@@ -549,8 +570,7 @@ impl Adapter for OpenAiAdapter {
         ctrl: &RequestControl,
     ) -> Result<Box<dyn RealtimeSession>, Error> {
         let headers = self.authenticate().await?;
-        let mut http =
-            HttpRequest::get(openai_realtime::session_url(&self.target, &config.model));
+        let mut http = HttpRequest::get(openai_realtime::session_url(&self.target, &config.model));
         for (k, v) in headers.iter() {
             http.headers.append(k, v.clone());
         }

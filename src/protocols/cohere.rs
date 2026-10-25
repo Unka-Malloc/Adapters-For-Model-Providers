@@ -138,7 +138,11 @@ fn encode_assistant(parts: &[&ContentPart]) -> Result<Value, Error> {
     }
     msg.insert(
         "content".into(),
-        if text.is_empty() { Value::Null } else { text.into() },
+        if text.is_empty() {
+            Value::Null
+        } else {
+            text.into()
+        },
     );
     if !tool_calls.is_empty() {
         msg.insert("tool_calls".into(), tool_calls.into());
@@ -150,10 +154,7 @@ fn encode_assistant(parts: &[&ContentPart]) -> Result<Value, Error> {
 /// covers the all-text case; v2 blocks are text-only today.
 #[allow(unreachable_patterns)] // reachable only to downstream crates (non_exhaustive enums)
 fn encode_content(parts: &[&ContentPart], role: &str) -> Result<Value, Error> {
-    if parts
-        .iter()
-        .all(|p| matches!(p, ContentPart::Text { .. }))
-    {
+    if parts.iter().all(|p| matches!(p, ContentPart::Text { .. })) {
         let mut text = String::new();
         for p in parts {
             if let ContentPart::Text { text: t } = p {
@@ -257,9 +258,7 @@ pub fn decode_response(body: &[u8]) -> Result<Output, Error> {
         }
         Value::String(text) => {
             if !text.is_empty() {
-                parts.push(ContentPart::Text {
-                    text: text.clone(),
-                });
+                parts.push(ContentPart::Text { text: text.clone() });
             }
         }
         _ => {}
@@ -443,7 +442,11 @@ pub fn decode_embed(body: &[u8]) -> Result<EmbedOutput, Error> {
         let row = row
             .as_array()
             .ok_or_else(|| Error::UpstreamProtocol("embedding row is not an array".into()))?;
-        embeddings.push(row.iter().map(|n| n.as_f64().unwrap_or(0.0) as f32).collect());
+        embeddings.push(
+            row.iter()
+                .map(|n| n.as_f64().unwrap_or(0.0) as f32)
+                .collect(),
+        );
     }
     let usage = v
         .get("meta")
@@ -523,7 +526,10 @@ pub fn decode_rerank(body: &[u8]) -> Result<RerankOutput, Error> {
     for r in results {
         has_extras = has_extras
             || r.as_object()
-                .map(|o| o.keys().any(|k| !["index", "relevance_score"].contains(&k.as_str())))
+                .map(|o| {
+                    o.keys()
+                        .any(|k| !["index", "relevance_score"].contains(&k.as_str()))
+                })
                 .unwrap_or(false);
         hits.push(RerankHit {
             index: r["index"].as_u64().unwrap_or(0) as usize,
@@ -582,9 +588,9 @@ pub fn build_classify_request(req: &ClassifyRequest) -> Result<Value, Error> {
 pub fn decode_classify(body: &[u8]) -> Result<ClassifyOutput, Error> {
     let v: Value = serde_json::from_slice(body)
         .map_err(|e| Error::UpstreamProtocol(format!("cohere classify response: {e}")))?;
-    let classifications = v["classifications"]
-        .as_array()
-        .ok_or_else(|| Error::UpstreamProtocol("classify response has no classifications".into()))?;
+    let classifications = v["classifications"].as_array().ok_or_else(|| {
+        Error::UpstreamProtocol("classify response has no classifications".into())
+    })?;
     let mut predictions = Vec::with_capacity(classifications.len());
     for (i, c) in classifications.iter().enumerate() {
         predictions.push(Classification {
@@ -614,10 +620,7 @@ pub fn decode_classify(body: &[u8]) -> Result<ClassifyOutput, Error> {
 /// `status` is the HTTP status when known (stream errors may lack one).
 /// Cohere's envelope is a flat `{"message": "..."}`.
 pub fn provider_error(status: Option<u16>, body: &Value) -> Error {
-    let err = body
-        .get("error")
-        .filter(|e| e.is_object())
-        .unwrap_or(body);
+    let err = body.get("error").filter(|e| e.is_object()).unwrap_or(body);
     Error::Provider {
         status,
         code: err["code"].as_str().map(str::to_owned),

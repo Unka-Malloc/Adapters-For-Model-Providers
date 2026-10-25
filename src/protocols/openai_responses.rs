@@ -41,7 +41,8 @@ pub fn build_request(req: &ChatRequest) -> Result<Value, Error> {
     }
     if !s.stop.is_empty() {
         return Err(Error::Unsupported(
-            "Responses API has no stop-sequences field; use extensions for a provider variant".into(),
+            "Responses API has no stop-sequences field; use extensions for a provider variant"
+                .into(),
         ));
     }
     for (k, v) in &req.extensions {
@@ -152,7 +153,9 @@ fn encode_media(kind: &MediaKind, source: &MediaSource) -> Result<Value, Error> 
         (_, MediaSource::Resource(id)) => Err(Error::Unsupported(format!(
             "unresolved resource {id:?}; the adapter resolves resources first"
         ))),
-        _ => Err(Error::Unsupported("media kind not representable in Responses input".into())),
+        _ => Err(Error::Unsupported(
+            "media kind not representable in Responses input".into(),
+        )),
     }
 }
 
@@ -214,7 +217,10 @@ pub fn decode_response(body: &[u8]) -> Result<Output, Error> {
             return Err(Error::Provider {
                 status: None,
                 code: None,
-                message: v["error"]["message"].as_str().unwrap_or("response failed").to_owned(),
+                message: v["error"]["message"]
+                    .as_str()
+                    .unwrap_or("response failed")
+                    .to_owned(),
                 retry: RetrySafety::Unsafe,
                 raw: Some(v.clone()),
             });
@@ -224,8 +230,16 @@ pub fn decode_response(body: &[u8]) -> Result<Output, Error> {
         None => None,
     };
     let claimed = [
-        "id", "object", "created_at", "model", "output", "usage", "status",
-        "incomplete_details", "error", "metadata",
+        "id",
+        "object",
+        "created_at",
+        "model",
+        "output",
+        "usage",
+        "status",
+        "incomplete_details",
+        "error",
+        "metadata",
     ];
     let mut extensions = Map::new();
     if let Some(obj) = v.as_object() {
@@ -238,7 +252,10 @@ pub fn decode_response(body: &[u8]) -> Result<Output, Error> {
     Ok(Output {
         parts,
         stop,
-        usage: v.get("usage").filter(|u| !u.is_null()).map(decode_usage_responses),
+        usage: v
+            .get("usage")
+            .filter(|u| !u.is_null())
+            .map(decode_usage_responses),
         extensions,
     })
 }
@@ -267,7 +284,11 @@ fn decode_item(item: &Value, parts: &mut Vec<ContentPart>) -> Result<(), Error> 
         }
         Some("function_call") => {
             parts.push(ContentPart::ToolCall(ToolCall {
-                id: item["call_id"].as_str().or(item["id"].as_str()).unwrap_or_default().to_owned(),
+                id: item["call_id"]
+                    .as_str()
+                    .or(item["id"].as_str())
+                    .unwrap_or_default()
+                    .to_owned(),
                 name: item["name"].as_str().unwrap_or_default().to_owned(),
                 arguments: serde_json::from_str(item["arguments"].as_str().unwrap_or("{}"))
                     .unwrap_or_else(|_| item["arguments"].clone()),
@@ -584,7 +605,10 @@ impl crate::transport::SseEventDecoder for ResponsesStreamDecoder {
                 }
             }
             "response.completed" | "response.incomplete" => {
-                if let Some(u) = v["response"]["usage"].as_object().map(|_| &v["response"]["usage"]) {
+                if let Some(u) = v["response"]["usage"]
+                    .as_object()
+                    .map(|_| &v["response"]["usage"])
+                {
                     out.push(StreamEvent::Usage(decode_usage_responses(u)));
                 }
                 let stop = match ty {

@@ -105,15 +105,12 @@ impl Transport for ChannelTransport {
         req: HttpRequest,
         _ctrl: &RequestControl,
     ) -> Result<Box<dyn DuplexChannel>, TransportError> {
-        self.requests
-            .lock()
-            .unwrap()
-            .push(common::RecordedRequest {
-                method: req.method.clone(),
-                url: req.url.clone(),
-                headers: req.headers.clone(),
-                body: req.body.to_vec(),
-            });
+        self.requests.lock().unwrap().push(common::RecordedRequest {
+            method: req.method.clone(),
+            url: req.url.clone(),
+            headers: req.headers.clone(),
+            body: req.body.to_vec(),
+        });
         self.channel
             .lock()
             .unwrap()
@@ -133,7 +130,7 @@ fn adapter(transport: ChannelTransport) -> OpenAiAdapter {
         AuthKind::Bearer,
         Arc::new(transport),
         Arc::new(StaticCredential(Credential::Bearer {
-            token: Secret::new("sk-test"),
+            token: Secret::new(common::run_token("bearer")),
             expires_at: None,
         })),
     )
@@ -191,7 +188,10 @@ async fn open_realtime_handshakes_ws_url_beta_header_and_session_update() {
         .find(|(k, _)| k == "model")
         .map(|(_, v)| v.into_owned());
     assert_eq!(model.as_deref(), Some("gpt-realtime-test"));
-    assert_eq!(req.headers.get("authorization").unwrap(), "Bearer sk-test");
+    assert_eq!(
+        req.headers.get("authorization").unwrap(),
+        format!("Bearer {}", common::run_token("bearer")).as_str()
+    );
     assert_eq!(req.headers.get("openai-beta").unwrap(), "realtime=v1");
 
     // session.update carries modalities plus extension fields verbatim.
@@ -409,9 +409,7 @@ async fn events_decode_deltas_toolcalls_usage_error_and_close() {
                 assert_eq!(media_type, "audio/pcm16");
                 audio.extend_from_slice(&data);
             }
-            Ok(RealtimeEvent::Transcript { text, final_ }) => {
-                transcripts.push((text, final_))
-            }
+            Ok(RealtimeEvent::Transcript { text, final_ }) => transcripts.push((text, final_)),
             Ok(RealtimeEvent::ToolCall(c)) => calls.push(c),
             Ok(RealtimeEvent::Usage(u)) => usage = Some(u),
             Ok(RealtimeEvent::Native(v)) => natives.push(v),

@@ -23,7 +23,7 @@ fn adapter(transport: MockTransport) -> BedrockAdapter {
         AuthKind::Bearer,
         Arc::new(transport),
         Arc::new(StaticCredential(Credential::Bearer {
-            token: Secret::new("bedrock-token"),
+            token: Secret::new(common::run_token("bearer")),
             expires_at: None,
         })),
     )
@@ -154,7 +154,9 @@ async fn chat_request_maps_system_tools_toolconfig_and_inference() {
     req.messages.push(Message {
         role: Role::Assistant,
         content: vec![
-            ContentPart::Text { text: "checking".into() },
+            ContentPart::Text {
+                text: "checking".into(),
+            },
             ContentPart::ToolCall(ToolCall {
                 id: "tu_1".into(),
                 name: "lookup".into(),
@@ -185,7 +187,8 @@ async fn chat_request_maps_system_tools_toolconfig_and_inference() {
         "additionalModelRequestFields".into(),
         json!({"thinking": {"type": "enabled", "budget_tokens": 1024}}),
     );
-    req.extensions.insert("serviceTier".into(), json!("priority"));
+    req.extensions
+        .insert("serviceTier".into(), json!("priority"));
 
     let out = a.chat(req, &RequestControl::default()).await.unwrap();
 
@@ -196,13 +199,16 @@ async fn chat_request_maps_system_tools_toolconfig_and_inference() {
     );
     assert_eq!(
         req.headers.get("authorization").unwrap(),
-        "Bearer bedrock-token"
+        format!("Bearer {}", common::run_token("bearer")).as_str()
     );
     let b = body_json(req);
     // The model id travels in the path, never in the body.
     assert!(b.get("model").is_none());
     assert_eq!(b["system"], json!([{"text": "be brief"}]));
-    assert_eq!(b["messages"][0], json!({"role": "user", "content": [{"text": "hello"}]}));
+    assert_eq!(
+        b["messages"][0],
+        json!({"role": "user", "content": [{"text": "hello"}]})
+    );
     assert_eq!(
         b["messages"][1]["content"][1],
         json!({"toolUse": {"toolUseId": "tu_1", "name": "lookup", "input": {"q": "x"}}})
@@ -215,7 +221,10 @@ async fn chat_request_maps_system_tools_toolconfig_and_inference() {
         b["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"]["type"],
         "object"
     );
-    assert_eq!(b["toolConfig"]["toolChoice"], json!({"tool": {"name": "lookup"}}));
+    assert_eq!(
+        b["toolConfig"]["toolChoice"],
+        json!({"tool": {"name": "lookup"}})
+    );
     assert_eq!(b["inferenceConfig"]["maxTokens"], 64);
     assert_eq!(b["inferenceConfig"]["temperature"], 0.5);
     assert_eq!(b["inferenceConfig"]["topP"], 0.75);
@@ -309,7 +318,8 @@ async fn assistant_reasoning_replays_its_opaque_block() {
         json!({"output": {"message": {"content": [{"text": "ok"}]}}}),
     ));
     let a = adapter(t.clone());
-    let block = json!({"reasoningContent": {"reasoningText": {"text": "why", "signature": "sig9"}}});
+    let block =
+        json!({"reasoningContent": {"reasoningText": {"text": "why", "signature": "sig9"}}});
     let mut req = ChatRequest::default();
     req.messages.push(Message {
         role: Role::Assistant,
@@ -724,7 +734,9 @@ async fn api_key_credential_also_sends_bearer() {
         target,
         AuthKind::ApiKey,
         Arc::new(t.clone()),
-        Arc::new(StaticCredential(Credential::ApiKey(Secret::new("key-1")))),
+        Arc::new(StaticCredential(Credential::ApiKey(Secret::new(
+            common::run_token("api-key"),
+        )))),
     )
     .unwrap();
     a.chat(ChatRequest::default(), &RequestControl::default())
@@ -732,7 +744,7 @@ async fn api_key_credential_also_sends_bearer() {
         .unwrap();
     assert_eq!(
         t.recorded()[0].headers.get("authorization").unwrap(),
-        "Bearer key-1"
+        format!("Bearer {}", common::run_token("api-key")).as_str()
     );
 }
 
@@ -754,7 +766,10 @@ async fn cloud_credential_signs_with_sigv4() {
     );
     target.region = Some("us-east-1".into());
     let mut context = serde_json::Map::new();
-    context.insert("access_key_id".into(), "AKIDEXAMPLE".into());
+    context.insert(
+        "access_key_id".into(),
+        common::run_token("access-id").into(),
+    );
     let a = BedrockAdapter::new(
         target,
         AuthKind::CloudIdentity {
@@ -762,7 +777,7 @@ async fn cloud_credential_signs_with_sigv4() {
         },
         Arc::new(t.clone()),
         Arc::new(StaticCredential(Credential::Cloud {
-            token: Secret::new("sigv4-material"),
+            token: Secret::new(common::run_token("signing")),
             expires_at: None,
             context,
         })),
@@ -781,7 +796,7 @@ async fn cloud_credential_signs_with_sigv4() {
         .to_str()
         .unwrap();
     assert!(auth.starts_with("AWS4-HMAC-SHA256 "), "{auth}");
-    assert!(auth.contains("Credential=AKIDEXAMPLE/"));
+    assert!(auth.contains(&format!("Credential={}/", common::run_token("access-id"))));
     assert!(auth.contains("/bedrock/aws4_request"));
     assert!(recorded[0].headers.contains_key("x-amz-date"));
     assert!(recorded[0].headers.contains_key("x-amz-content-sha256"));
@@ -802,7 +817,7 @@ async fn cloud_credential_missing_keys_names_the_gap() {
         },
         Arc::new(t.clone()),
         Arc::new(StaticCredential(Credential::Cloud {
-            token: Secret::new("sigv4-material"),
+            token: Secret::new(common::run_token("signing")),
             expires_at: None,
             context: serde_json::Map::new(),
         })),

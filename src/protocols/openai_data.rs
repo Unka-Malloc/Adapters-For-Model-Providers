@@ -103,9 +103,9 @@ fn decode_embedding(v: &Value) -> Result<Vec<f32>, Error> {
         Value::Array(items) => items
             .iter()
             .map(|n| {
-                n.as_f64()
-                    .map(|f| f as f32)
-                    .ok_or_else(|| Error::UpstreamProtocol("embedding entry is not a number".into()))
+                n.as_f64().map(|f| f as f32).ok_or_else(|| {
+                    Error::UpstreamProtocol("embedding entry is not a number".into())
+                })
             })
             .collect(),
         Value::String(s) => {
@@ -161,7 +161,11 @@ pub fn decode_moderate_output(body: &[u8]) -> Result<ModerateOutput, Error> {
     let mut out = Vec::with_capacity(results.len());
     for r in results {
         let mut names = BTreeSet::new();
-        for key in ["categories", "category_scores", "category_applied_input_types"] {
+        for key in [
+            "categories",
+            "category_scores",
+            "category_applied_input_types",
+        ] {
             if let Some(obj) = r[key].as_object() {
                 names.extend(obj.keys().cloned());
             }
@@ -237,10 +241,7 @@ pub fn decode_batch(body: &[u8]) -> Result<BatchInfo, Error> {
         for e in data {
             errors.push((
                 e["code"].as_str().map(str::to_owned),
-                e["message"]
-                    .as_str()
-                    .unwrap_or("batch error")
-                    .to_owned(),
+                e["message"].as_str().unwrap_or("batch error").to_owned(),
             ));
         }
     }

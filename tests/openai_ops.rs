@@ -23,7 +23,7 @@ fn adapter(transport: MockTransport) -> OpenAiAdapter {
         AuthKind::Bearer,
         Arc::new(transport),
         Arc::new(StaticCredential(Credential::Bearer {
-            token: Secret::new("sk-test"),
+            token: Secret::new(common::run_token("bearer")),
             expires_at: None,
         })),
     )
@@ -77,7 +77,10 @@ async fn embed_maps_inputs_dimensions_and_extensions() {
 
     let req = &t.recorded()[0];
     assert_eq!(req.url.path(), "/v1/embeddings");
-    assert_eq!(req.headers.get("authorization").unwrap(), "Bearer sk-test");
+    assert_eq!(
+        req.headers.get("authorization").unwrap(),
+        format!("Bearer {}", common::run_token("bearer")).as_str()
+    );
     let b = body_json(req);
     assert_eq!(b["model"], "vendor-embed");
     assert_eq!(b["input"], json!(["first", "second"]));
@@ -95,7 +98,10 @@ async fn embed_maps_inputs_dimensions_and_extensions() {
 #[tokio::test]
 async fn embed_single_input_travels_as_bare_string() {
     let t = MockTransport::new();
-    t.push(Response::Json(200, json!({"data": [{"index":0,"embedding":[1.0]}]})));
+    t.push(Response::Json(
+        200,
+        json!({"data": [{"index":0,"embedding":[1.0]}]}),
+    ));
     let a = adapter(t.clone());
     let req = EmbedRequest {
         model: "m".into(),
@@ -122,10 +128,7 @@ async fn embed_decodes_base64_rows_when_requested() {
     let a = adapter(t);
     let mut req = EmbedRequest {
         model: "m".into(),
-        inputs: vec![
-            EmbedInput::Text("a".into()),
-            EmbedInput::Text("b".into()),
-        ],
+        inputs: vec![EmbedInput::Text("a".into()), EmbedInput::Text("b".into())],
         ..Default::default()
     };
     req.extensions
@@ -384,9 +387,9 @@ async fn audio_transcribe_uploads_multipart_and_decodes_text() {
     assert!(body.contains(&format!("--{boundary}\r\n")));
     assert!(body.contains("Content-Disposition: form-data; name=\"model\"\r\n\r\near-2\r\n"));
     assert!(body.contains("Content-Disposition: form-data; name=\"language\"\r\n\r\nen\r\n"));
-    assert!(body.contains(
-        "Content-Disposition: form-data; name=\"prompt\"\r\n\r\nglossary words\r\n"
-    ));
+    assert!(
+        body.contains("Content-Disposition: form-data; name=\"prompt\"\r\n\r\nglossary words\r\n")
+    );
     assert!(body.contains(
         "Content-Disposition: form-data; name=\"file\"; filename=\"input.mp3\"\r\nContent-Type: audio/mpeg\r\n\r\n"
     ));
@@ -502,7 +505,7 @@ async fn openai_compatible_target_reuses_same_paths() {
         AuthKind::Bearer,
         Arc::new(t.clone()),
         Arc::new(StaticCredential(Credential::Bearer {
-            token: Secret::new("sk-ds"),
+            token: Secret::new(common::run_token("deepseek-bearer")),
             expires_at: None,
         })),
     )
@@ -521,7 +524,10 @@ async fn openai_compatible_target_reuses_same_paths() {
     assert_eq!(out.embeddings, vec![vec![0.5]]);
     let req = &t.recorded()[0];
     assert_eq!(req.url.path(), "/v1/embeddings");
-    assert_eq!(req.headers.get("authorization").unwrap(), "Bearer sk-ds");
+    assert_eq!(
+        req.headers.get("authorization").unwrap(),
+        format!("Bearer {}", common::run_token("deepseek-bearer")).as_str()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -531,7 +537,10 @@ async fn openai_compatible_target_reuses_same_paths() {
 #[tokio::test]
 async fn submit_job_uploads_jsonl_file_then_creates_batch() {
     let t = MockTransport::new();
-    t.push(Response::Json(200, json!({"id": "file-9", "purpose": "batch"})));
+    t.push(Response::Json(
+        200,
+        json!({"id": "file-9", "purpose": "batch"}),
+    ));
     t.push(Response::Json(
         200,
         json!({"id": "batch_7", "object": "batch", "status": "validating",
@@ -592,8 +601,14 @@ async fn job_state_maps_lifecycle_and_fetches_output() {
     let h = handle("batch_7");
     let ctrl = RequestControl::default();
 
-    t.push(Response::Json(200, json!({"id":"batch_7","status":"validating"})));
-    t.push(Response::Json(200, json!({"id":"batch_7","status":"in_progress"})));
+    t.push(Response::Json(
+        200,
+        json!({"id":"batch_7","status":"validating"}),
+    ));
+    t.push(Response::Json(
+        200,
+        json!({"id":"batch_7","status":"in_progress"}),
+    ));
     t.push(Response::Json(
         200,
         json!({"id":"batch_7","status":"completed","output_file_id":"file-out"}),
@@ -602,7 +617,10 @@ async fn job_state_maps_lifecycle_and_fetches_output() {
         200,
         "{\"custom_id\":\"a4mp-0\",\"response\":{\"status_code\":200,\"body\":{\"choices\":[]}}}\n",
     ));
-    t.push(Response::Json(200, json!({"id":"batch_7","status":"cancelled"})));
+    t.push(Response::Json(
+        200,
+        json!({"id":"batch_7","status":"cancelled"}),
+    ));
 
     assert!(matches!(
         a.job_state(&h, &ctrl).await.unwrap(),

@@ -173,7 +173,11 @@ pub fn profiles() -> Vec<ProviderProfile> {
             auth: KEY.to_vec(),
             targets: vec![
                 region(CHAT, "https://open.bigmodel.cn/api/paas/v4", "api"),
-                region(CHAT, "https://open.bigmodel.cn/api/coding/paas/v4", "coding-plan"),
+                region(
+                    CHAT,
+                    "https://open.bigmodel.cn/api/coding/paas/v4",
+                    "coding-plan",
+                ),
             ],
             catalogue: Some("zhipuai"),
         },
@@ -229,8 +233,16 @@ pub fn profiles() -> Vec<ProviderProfile> {
             aliases: &["qwen", "dashscope", "bailian"],
             auth: KEY.to_vec(),
             targets: vec![
-                region(CHAT, "https://dashscope.aliyuncs.com/compatible-mode/v1", "cn"),
-                region(CHAT, "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "intl"),
+                region(
+                    CHAT,
+                    "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                    "cn",
+                ),
+                region(
+                    CHAT,
+                    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                    "intl",
+                ),
             ],
             catalogue: Some("alibaba"),
         },
@@ -464,7 +476,10 @@ pub fn profiles() -> Vec<ProviderProfile> {
             auth: vec![AuthSpec::ApiKey, AuthSpec::Bearer],
             targets: vec![
                 target(RESP, "https://{resource}.services.ai.azure.com/openai/v1"),
-                target(ANTH, "https://{resource}.services.ai.azure.com/anthropic/v1"),
+                target(
+                    ANTH,
+                    "https://{resource}.services.ai.azure.com/anthropic/v1",
+                ),
             ],
             catalogue: Some("azure-ai-foundry"),
         },

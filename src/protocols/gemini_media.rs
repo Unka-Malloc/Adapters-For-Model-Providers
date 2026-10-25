@@ -115,9 +115,9 @@ pub fn decode_image_output(body: &[u8]) -> Result<MediaOutput, Error> {
     let mut extras = Vec::with_capacity(predictions.len());
     let mut any_extra = false;
     for p in predictions {
-        let b64 = p["bytesBase64Encoded"]
-            .as_str()
-            .ok_or_else(|| Error::UpstreamProtocol("prediction carries no bytesBase64Encoded".into()))?;
+        let b64 = p["bytesBase64Encoded"].as_str().ok_or_else(|| {
+            Error::UpstreamProtocol("prediction carries no bytesBase64Encoded".into())
+        })?;
         let media_type = p["mimeType"]
             .as_str()
             .unwrap_or("application/octet-stream")

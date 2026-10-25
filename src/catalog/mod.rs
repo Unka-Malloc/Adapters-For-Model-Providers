@@ -82,9 +82,8 @@ impl ServiceDef {
     }
 
     fn materialize(&self, provider: &ProviderId, base_url: &str) -> Result<ServiceTarget, Error> {
-        let url = url::Url::parse(base_url).map_err(|e| {
-            Error::Protocol(format!("profile {} endpoint {e}", provider.as_str()))
-        })?;
+        let url = url::Url::parse(base_url)
+            .map_err(|e| Error::Protocol(format!("profile {} endpoint {e}", provider.as_str())))?;
         let mut target = ServiceTarget::new(provider.clone(), self.protocol.clone(), url);
         target.region = self.region.map(str::to_owned);
         for (k, v) in self.headers {
@@ -434,7 +433,11 @@ impl Client {
 
     /// Bind an adapter for an explicit service target (custom endpoints,
     /// self-hosted servers) without a profile.
-    pub fn bind_target(&self, target: ServiceTarget, auth: AuthKind) -> Result<Arc<dyn Adapter>, Error> {
+    pub fn bind_target(
+        &self,
+        target: ServiceTarget,
+        auth: AuthKind,
+    ) -> Result<Arc<dyn Adapter>, Error> {
         self.catalog.bind(
             target,
             auth,

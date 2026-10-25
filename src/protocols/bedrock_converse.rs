@@ -98,9 +98,7 @@ fn encode_messages(messages: &[Message]) -> Result<(Option<Value>, Value), Error
             Role::System => {
                 for part in &m.content {
                     match part {
-                        ContentPart::Text { text } => {
-                            system_blocks.push(json!({ "text": text }))
-                        }
+                        ContentPart::Text { text } => system_blocks.push(json!({ "text": text })),
                         _ => {
                             return Err(Error::Unsupported(
                                 "system messages carry text only in the Converse API".into(),
@@ -137,9 +135,11 @@ fn encode_user(parts: &[ContentPart]) -> Result<Vec<Value>, Error> {
     for part in parts {
         match part {
             ContentPart::Text { text } => out.push(json!({ "text": text })),
-            ContentPart::Media { kind, source, detail } => {
-                out.push(encode_media(kind, source, detail)?)
-            }
+            ContentPart::Media {
+                kind,
+                source,
+                detail,
+            } => out.push(encode_media(kind, source, detail)?),
             // Tool results are ordinary user-role content blocks here.
             ContentPart::ToolResult(tr) => out.push(encode_tool_result(tr)?),
             ContentPart::ToolCall(_) => {
@@ -338,7 +338,9 @@ pub fn decode_response(body: &[u8]) -> Result<Output, Error> {
         if v.get("message").is_some() || v.get("__type").is_some() {
             return Err(provider_error(None, &v));
         }
-        return Err(Error::UpstreamProtocol("converse response missing output".into()));
+        return Err(Error::UpstreamProtocol(
+            "converse response missing output".into(),
+        ));
     }
     let mut parts = Vec::new();
     if let Some(blocks) = v["output"]["message"]["content"].as_array() {
@@ -595,8 +597,7 @@ impl EventStreamDecoder {
                 "event-stream prelude CRC mismatch".into(),
             ));
         }
-        let message_crc =
-            u32::from_be_bytes(self.buf[total - 4..total].try_into().unwrap());
+        let message_crc = u32::from_be_bytes(self.buf[total - 4..total].try_into().unwrap());
         if crc32(&self.buf[0..total - 4]) != message_crc {
             return Err(Error::UpstreamProtocol(
                 "event-stream message CRC mismatch".into(),
@@ -655,7 +656,10 @@ fn parse_header_value(ty: u8, bytes: &[u8]) -> Result<(FrameValue, &[u8]), Error
         }
         3 => {
             let (v, rest) = take(bytes, 2)?;
-            (FrameValue::Int(i16::from_be_bytes(v.try_into().unwrap()) as i64), rest)
+            (
+                FrameValue::Int(i16::from_be_bytes(v.try_into().unwrap()) as i64),
+                rest,
+            )
         }
         4 => {
             let (v, rest) = take(bytes, 4)?;
@@ -793,8 +797,7 @@ impl ConverseStreamDecoder {
             }
             "contentBlockStop" => {
                 let wire = v["contentBlockIndex"].as_u64().unwrap_or(0);
-                if let (Some(index), true) = (self.parts.get(&wire), self.opened.contains(&wire))
-                {
+                if let (Some(index), true) = (self.parts.get(&wire), self.opened.contains(&wire)) {
                     out.push(StreamEvent::PartFinished { index: *index });
                 }
             }

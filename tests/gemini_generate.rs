@@ -17,8 +17,13 @@ fn adapter_with(transport: MockTransport, auth: AuthKind, cred: Credential) -> G
         Protocol::GeminiGenerateContent,
         url::Url::parse("https://generativelanguage.test").unwrap(),
     );
-    GeminiAdapter::new(target, auth, Arc::new(transport), Arc::new(StaticCredential(cred)))
-        .unwrap()
+    GeminiAdapter::new(
+        target,
+        auth,
+        Arc::new(transport),
+        Arc::new(StaticCredential(cred)),
+    )
+    .unwrap()
 }
 
 fn adapter(transport: MockTransport) -> GeminiAdapter {
@@ -50,7 +55,8 @@ async fn chat_request_maps_contents_system_tools_config_and_extensions() {
     };
     // System messages hoist into one systemInstruction, parts merged.
     req.messages.push(Message::text(Role::System, "be terse"));
-    req.messages.push(Message::text(Role::System, "reply in json"));
+    req.messages
+        .push(Message::text(Role::System, "reply in json"));
     req.messages.push(Message::text(Role::User, "hello"));
     req.messages.push(Message {
         role: Role::Assistant,
@@ -111,8 +117,14 @@ async fn chat_request_maps_contents_system_tools_config_and_extensions() {
 
     let rec = &t.recorded()[0];
     // Model id rides the URL path, not the body.
-    assert_eq!(rec.url.path(), "/v1beta/models/gemini-test-1:generateContent");
-    assert_eq!(rec.headers.get("x-goog-api-key").unwrap(), common::run_token("api-key"));
+    assert_eq!(
+        rec.url.path(),
+        "/v1beta/models/gemini-test-1:generateContent"
+    );
+    assert_eq!(
+        rec.headers.get("x-goog-api-key").unwrap(),
+        common::run_token("api-key")
+    );
     assert!(rec.headers.get("authorization").is_none());
     let b = body_json(rec);
     assert!(b.get("model").is_none());
@@ -328,7 +340,10 @@ async fn chat_stream_decodes_response_frames_incrementally() {
         model: "gemini-test-1".into(),
         ..Default::default()
     };
-    let stream = a.chat_stream(req, &RequestControl::default()).await.unwrap();
+    let stream = a
+        .chat_stream(req, &RequestControl::default())
+        .await
+        .unwrap();
     let events = collect(stream).await.unwrap();
 
     let rec = &t.recorded()[0];
@@ -357,9 +372,10 @@ async fn chat_stream_decodes_response_frames_incrementally() {
             }
             StreamEvent::ToolCallDelta { arguments, .. } => args.push_str(arguments),
             StreamEvent::PartFinished { .. } => log.push("fin".into()),
-            StreamEvent::Native { value, .. } => {
-                log.push(format!("native:{}", value["thoughtSignature"].as_str().unwrap_or("?")))
-            }
+            StreamEvent::Native { value, .. } => log.push(format!(
+                "native:{}",
+                value["thoughtSignature"].as_str().unwrap_or("?")
+            )),
             StreamEvent::Usage(u) => {
                 assert_eq!(u.input_tokens, Some(8));
                 assert_eq!(u.output_tokens, Some(6));
@@ -410,7 +426,10 @@ async fn bearer_auth_uses_authorization_header() {
         .await
         .unwrap();
     let rec = &t.recorded()[0];
-    assert_eq!(rec.headers.get("authorization").unwrap(), format!("Bearer {}", common::run_token("bearer")).as_str());
+    assert_eq!(
+        rec.headers.get("authorization").unwrap(),
+        format!("Bearer {}", common::run_token("bearer")).as_str()
+    );
     assert!(rec.headers.get("x-goog-api-key").is_none());
 }
 
@@ -422,7 +441,10 @@ async fn http_error_maps_gemini_error_envelope() {
         json!({"error": {"code": 400, "message": "bad request", "status": "INVALID_ARGUMENT"}}),
     ));
     let a = adapter(t);
-    match a.chat(ChatRequest::default(), &RequestControl::default()).await {
+    match a
+        .chat(ChatRequest::default(), &RequestControl::default())
+        .await
+    {
         Err(Error::Provider {
             status,
             code,
@@ -441,7 +463,10 @@ async fn http_error_maps_gemini_error_envelope() {
     let t = MockTransport::new();
     t.push(Response::Text(500, "upstream exploded"));
     let a = adapter(t);
-    match a.chat(ChatRequest::default(), &RequestControl::default()).await {
+    match a
+        .chat(ChatRequest::default(), &RequestControl::default())
+        .await
+    {
         Err(Error::Provider { status, retry, .. }) => {
             assert_eq!(status, Some(500));
             assert_eq!(retry, RetrySafety::Unsafe);
@@ -461,7 +486,10 @@ async fn chat_error_envelope_after_2xx_is_unsafe_to_retry() {
         json!({"error": {"code": 429, "message": "quota exhausted", "status": "RESOURCE_EXHAUSTED"}}),
     ));
     let a = adapter(t);
-    match a.chat(ChatRequest::default(), &RequestControl::default()).await {
+    match a
+        .chat(ChatRequest::default(), &RequestControl::default())
+        .await
+    {
         Err(Error::Provider {
             status,
             code,
@@ -577,11 +605,6 @@ async fn wrong_protocol_target_is_rejected() {
         Protocol::OpenAiChatCompletions,
         url::Url::parse("https://example.test").unwrap(),
     );
-    let res = GeminiAdapter::new(
-        target,
-        AuthKind::None,
-        Arc::new(t),
-        Arc::new(NoCredentials),
-    );
+    let res = GeminiAdapter::new(target, AuthKind::None, Arc::new(t), Arc::new(NoCredentials));
     assert!(matches!(res, Err(Error::Unsupported(_))));
 }

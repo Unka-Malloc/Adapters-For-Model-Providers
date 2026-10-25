@@ -155,10 +155,7 @@ fn github_decode_token(body: &Value) -> Result<OAuthToken, Error> {
             .unwrap_or("Bearer")
             .to_owned(),
         expires_at,
-        scope: body
-            .get("scope")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        scope: body.get("scope").and_then(Value::as_str).map(str::to_owned),
         raw: body.clone(),
     })
 }
@@ -170,9 +167,10 @@ async fn github_device_authorize(
     transport: &dyn Transport,
     ctrl: &RequestControl,
 ) -> Result<DeviceGrant, Error> {
-    let url = client.device_url.clone().ok_or_else(|| {
-        Error::Unsupported("client has no device-authorization endpoint".into())
-    })?;
+    let url = client
+        .device_url
+        .clone()
+        .ok_or_else(|| Error::Unsupported("client has no device-authorization endpoint".into()))?;
     let mut pairs = vec![("client_id".to_owned(), client.client_id.clone())];
     if let Some(scope) = &client.scope {
         pairs.push(("scope".into(), scope.clone()));
@@ -189,7 +187,8 @@ async fn github_device_authorize(
             .ok_or_else(|| Error::UpstreamProtocol(format!("device grant missing {k}")))
     };
     let parse_url = |s: &str| -> Result<url::Url, Error> {
-        url::Url::parse(s).map_err(|e| Error::UpstreamProtocol(format!("bad verification URI: {e}")))
+        url::Url::parse(s)
+            .map_err(|e| Error::UpstreamProtocol(format!("bad verification URI: {e}")))
     };
     Ok(DeviceGrant {
         device_code: get_str("device_code")?,
@@ -201,9 +200,16 @@ async fn github_device_authorize(
             .map(parse_url)
             .transpose()?,
         expires_at: SystemTime::now()
-            + Duration::from_secs(body.get("expires_in").and_then(Value::as_u64).unwrap_or(600)),
+            + Duration::from_secs(
+                body.get("expires_in")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(600),
+            ),
         interval: Duration::from_secs(
-            body.get("interval").and_then(Value::as_u64).unwrap_or(5).max(1),
+            body.get("interval")
+                .and_then(Value::as_u64)
+                .unwrap_or(5)
+                .max(1),
         ),
         raw: body,
     })
@@ -308,8 +314,9 @@ pub async fn copilot_session(
             }
         });
     }
-    let body: Value = serde_json::from_slice(&res.body)
-        .map_err(|e| Error::UpstreamProtocol(format!("copilot session response is not JSON: {e}")))?;
+    let body: Value = serde_json::from_slice(&res.body).map_err(|e| {
+        Error::UpstreamProtocol(format!("copilot session response is not JSON: {e}"))
+    })?;
     let token = body
         .get("token")
         .and_then(Value::as_str)
@@ -317,7 +324,9 @@ pub async fn copilot_session(
     let expires_at = body
         .get("expires_at")
         .and_then(Value::as_u64)
-        .ok_or_else(|| Error::UpstreamProtocol("copilot session response missing expires_at".into()))?;
+        .ok_or_else(|| {
+            Error::UpstreamProtocol("copilot session response missing expires_at".into())
+        })?;
     Ok(CopilotToken {
         token: Secret::new(token),
         expires_at: UNIX_EPOCH + Duration::from_secs(expires_at),

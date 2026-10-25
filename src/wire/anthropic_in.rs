@@ -108,10 +108,13 @@ fn decode_system(
         }
     };
     if !content.is_empty() {
-        req.messages.insert(0, Message {
-            role: Role::System,
-            content,
-        });
+        req.messages.insert(
+            0,
+            Message {
+                role: Role::System,
+                content,
+            },
+        );
     }
     Ok(())
 }
@@ -141,9 +144,7 @@ fn decode_message(
         Some(Value::Array(blocks)) => {
             let mut out = Vec::new();
             for (j, block) in blocks.iter().enumerate() {
-                if let Some(p) =
-                    decode_block(&format!("{}.content[{j}]", path()), block, report)?
-                {
+                if let Some(p) = decode_block(&format!("{}.content[{j}]", path()), block, report)? {
                     out.push(p);
                 }
             }
@@ -267,7 +268,11 @@ fn decode_media_source(
             obj["file_id"].as_str().unwrap_or_default().to_owned(),
         ))),
         Some(other) => {
-            loss(report, LossKind::Unsupported, format!("{path}.source ({other:?})"));
+            loss(
+                report,
+                LossKind::Unsupported,
+                format!("{path}.source ({other:?})"),
+            );
             Ok(None)
         }
         None => Err(Error::Protocol(format!("{path}: source missing type"))),
@@ -319,7 +324,10 @@ fn decode_tool_result(
     Ok(ContentPart::ToolResult(ToolResult {
         call_id: obj["tool_use_id"].as_str().unwrap_or_default().to_owned(),
         content,
-        is_error: obj.get("is_error").and_then(Value::as_bool).unwrap_or(false),
+        is_error: obj
+            .get("is_error")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     }))
 }
 
@@ -343,7 +351,11 @@ fn decode_tool(index: usize, t: &Value, req: &mut ChatRequest, report: &mut Conv
     }
 }
 
-fn decode_tool_choice(choice: Option<&Value>, req: &mut ChatRequest, report: &mut ConversionReport) {
+fn decode_tool_choice(
+    choice: Option<&Value>,
+    req: &mut ChatRequest,
+    report: &mut ConversionReport,
+) {
     let Some(obj) = choice.and_then(Value::as_object) else {
         if choice.is_some_and(|c| !c.is_null()) {
             loss(report, LossKind::Unsupported, "request.tool_choice");
@@ -354,7 +366,9 @@ fn decode_tool_choice(choice: Option<&Value>, req: &mut ChatRequest, report: &mu
         Some("auto") => Some(ToolChoice::Auto),
         Some("none") => Some(ToolChoice::None),
         Some("any") => Some(ToolChoice::Required),
-        Some("tool") => obj["name"].as_str().map(|n| ToolChoice::Named(n.to_owned())),
+        Some("tool") => obj["name"]
+            .as_str()
+            .map(|n| ToolChoice::Named(n.to_owned())),
         _ => None,
     };
     match parsed {
@@ -374,7 +388,10 @@ fn decode_tool_choice(choice: Option<&Value>, req: &mut ChatRequest, report: &mu
 
 fn decode_sampling(obj: &Map<String, Value>, req: &mut ChatRequest, report: &mut ConversionReport) {
     for (key, slot) in [
-        ("temperature", &mut req.sampling.temperature as &mut Option<f32>),
+        (
+            "temperature",
+            &mut req.sampling.temperature as &mut Option<f32>,
+        ),
         ("top_p", &mut req.sampling.top_p),
     ] {
         if let Some(v) = obj.get(key) {
@@ -640,13 +657,11 @@ impl StreamEncoder for AnthropicStreamEncoder {
         let mut out = Vec::new();
         match event {
             StreamEvent::PartStarted { index, kind } => match kind {
-                PartKind::Text => out.push(
-                    self.block_start(*index, json!({ "type": "text", "text": "" })),
-                ),
-                PartKind::Reasoning => out.push(self.block_start(
-                    *index,
-                    json!({ "type": "thinking", "thinking": "" }),
-                )),
+                PartKind::Text => {
+                    out.push(self.block_start(*index, json!({ "type": "text", "text": "" })))
+                }
+                PartKind::Reasoning => out
+                    .push(self.block_start(*index, json!({ "type": "thinking", "thinking": "" }))),
                 // Tool calls open on `ToolCallStarted` with full identity.
                 PartKind::ToolCall => {}
                 PartKind::Media => {
@@ -664,10 +679,9 @@ impl StreamEncoder for AnthropicStreamEncoder {
             },
             StreamEvent::TextDelta { index, text } => {
                 if !text.is_empty() {
-                    out.push(self.block_delta(
-                        *index,
-                        json!({ "type": "text_delta", "text": text }),
-                    ));
+                    out.push(
+                        self.block_delta(*index, json!({ "type": "text_delta", "text": text })),
+                    );
                 }
             }
             StreamEvent::ReasoningDelta { index, text } => {

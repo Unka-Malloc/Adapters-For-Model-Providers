@@ -247,7 +247,9 @@ pub fn decode_transcription(body: &[u8]) -> Result<MediaOutput, Error> {
             }
             let text = v["text"]
                 .as_str()
-                .ok_or_else(|| Error::UpstreamProtocol("transcription response missing text".into()))?
+                .ok_or_else(|| {
+                    Error::UpstreamProtocol("transcription response missing text".into())
+                })?
                 .to_owned();
             Ok(MediaOutput {
                 media: Vec::new(),

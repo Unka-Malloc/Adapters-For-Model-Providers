@@ -117,7 +117,9 @@ async fn chat_request_maps_messages_images_tools_and_options() {
     req.messages.push(Message {
         role: Role::User,
         content: vec![
-            ContentPart::Text { text: "look at this".into() },
+            ContentPart::Text {
+                text: "look at this".into(),
+            },
             ContentPart::Media {
                 kind: MediaKind::Image,
                 source: MediaSource::Inline {
@@ -140,7 +142,9 @@ async fn chat_request_maps_messages_images_tools_and_options() {
         role: Role::User,
         content: vec![ContentPart::ToolResult(ToolResult {
             call_id: "ignored-by-ollama".into(),
-            content: vec![ContentPart::Text { text: "sunny".into() }],
+            content: vec![ContentPart::Text {
+                text: "sunny".into(),
+            }],
             is_error: false,
         })],
     });
@@ -167,7 +171,10 @@ async fn chat_request_maps_messages_images_tools_and_options() {
     assert_eq!(b["model"], "qwen3");
     // Non-streaming is explicit: the wire defaults to streaming.
     assert_eq!(b["stream"], false);
-    assert_eq!(b["messages"][0], json!({"role": "system", "content": "be brief"}));
+    assert_eq!(
+        b["messages"][0],
+        json!({"role": "system", "content": "be brief"})
+    );
     assert_eq!(b["messages"][1]["role"], "user");
     assert_eq!(b["messages"][1]["content"], "look at this");
     assert_eq!(b["messages"][1]["images"], json!(["ChQe"]));
@@ -271,7 +278,10 @@ async fn chat_response_decodes_thinking_into_reasoning() {
     assert_eq!(out.parts.len(), 2);
     match &out.parts[0] {
         ContentPart::Reasoning(rb) => {
-            assert_eq!(rb.summary.as_deref(), Some("the user asked to reply exactly"));
+            assert_eq!(
+                rb.summary.as_deref(),
+                Some("the user asked to reply exactly")
+            );
             assert_eq!(rb.opaque["thinking"], "the user asked to reply exactly");
         }
         other => panic!("expected reasoning, got {other:?}"),
@@ -303,7 +313,10 @@ async fn chat_stream_decodes_thinking_deltas() {
     let kinds = collect(st).await.unwrap();
     assert!(kinds.iter().any(|e| matches!(
         e,
-        StreamEvent::PartStarted { kind: PartKind::Reasoning, .. }
+        StreamEvent::PartStarted {
+            kind: PartKind::Reasoning,
+            ..
+        }
     )));
     assert!(kinds.iter().any(|e| matches!(
         e,
@@ -362,9 +375,7 @@ async fn chat_stream_decodes_ndjson_split_mid_line() {
             }
             StreamEvent::ToolCallDelta { arguments, .. } => args.push_str(arguments),
             StreamEvent::Usage(u) => usage = Some((u.input_tokens, u.output_tokens)),
-            StreamEvent::Finished { stop } => {
-                finished = matches!(stop, Some(StopReason::Complete))
-            }
+            StreamEvent::Finished { stop } => finished = matches!(stop, Some(StopReason::Complete)),
             _ => {}
         }
     }
@@ -542,7 +553,7 @@ async fn bearer_credential_sets_authorization_header() {
         AuthKind::Bearer,
         Arc::new(t.clone()),
         Arc::new(StaticCredential(Credential::Bearer {
-            token: Secret::new("cloud-token"),
+            token: Secret::new(common::run_token("bearer")),
             expires_at: None,
         })),
     )
@@ -553,7 +564,7 @@ async fn bearer_credential_sets_authorization_header() {
         .unwrap();
     assert_eq!(
         t.recorded()[0].headers.get("authorization").unwrap(),
-        "Bearer cloud-token"
+        format!("Bearer {}", common::run_token("bearer")).as_str()
     );
 }
 

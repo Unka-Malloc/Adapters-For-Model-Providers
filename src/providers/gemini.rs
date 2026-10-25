@@ -91,7 +91,11 @@ impl GeminiAdapter {
     /// Resolve `MediaSource::Resource` parts into inline data through the
     /// host effect port before the request enters the codec. A `detail`
     /// declared on the part supplies the resource's media type.
-    async fn resolve_media(&self, req: &mut ChatRequest, ctrl: &RequestControl) -> Result<(), Error> {
+    async fn resolve_media(
+        &self,
+        req: &mut ChatRequest,
+        ctrl: &RequestControl,
+    ) -> Result<(), Error> {
         let needs_resolve = req.messages.iter().any(|m| {
             m.content.iter().any(|p| {
                 matches!(
@@ -164,8 +168,7 @@ impl GeminiAdapter {
             // Drain the error body before building the error.
             let mut body = Vec::new();
             let mut stream = res.body;
-            while let Some(chunk) = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await
-            {
+            while let Some(chunk) = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await {
                 match chunk {
                     Ok(b) => body.extend_from_slice(&b),
                     Err(e) => return Err(e),
@@ -254,16 +257,22 @@ impl Adapter for GeminiAdapter {
 
     /// Veo video generation is a long-running operation, not a
     /// synchronous call: submit through `submit_job`, poll `job_state`.
-    async fn video(&self, _req: VideoRequest, _ctrl: &RequestControl) -> Result<MediaOutput, Error> {
-        Err(self.unsupported(
-            "video (Veo runs on predictLongRunning; use submit_job + job_state)",
-        ))
+    async fn video(
+        &self,
+        _req: VideoRequest,
+        _ctrl: &RequestControl,
+    ) -> Result<MediaOutput, Error> {
+        Err(self.unsupported("video (Veo runs on predictLongRunning; use submit_job + job_state)"))
     }
 
     /// `POST v1beta/models/{model}:predictLongRunning` — only
     /// `JobOperation::Video` maps onto this wire; chat, embed, image and
     /// audio are synchronous surfaces on Gemini and answer `Unsupported`.
-    async fn submit_job(&self, op: JobOperation, ctrl: &RequestControl) -> Result<JobHandle, Error> {
+    async fn submit_job(
+        &self,
+        op: JobOperation,
+        ctrl: &RequestControl,
+    ) -> Result<JobHandle, Error> {
         let JobOperation::Video(req) = &op else {
             return Err(self.unsupported(
                 "submit_job for this operation (only video is a long-running job on Gemini)",
@@ -284,7 +293,11 @@ impl Adapter for GeminiAdapter {
     }
 
     /// `GET v1beta/{operation}` — poll the long-running operation.
-    async fn job_state(&self, handle: &JobHandle, ctrl: &RequestControl) -> Result<JobState, Error> {
+    async fn job_state(
+        &self,
+        handle: &JobHandle,
+        ctrl: &RequestControl,
+    ) -> Result<JobState, Error> {
         let headers = self.authenticate().await?;
         let mut http = HttpRequest::get(self.operation_url(&handle.id, ""));
         for (k, v) in headers.iter() {

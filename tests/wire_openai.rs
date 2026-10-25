@@ -79,7 +79,11 @@ fn decodes_messages_tools_sampling_and_extensions() {
     assert_eq!(req.sampling.temperature, Some(0.5));
     assert_eq!(req.sampling.max_output_tokens, Some(64));
     assert_eq!(req.sampling.stop, ["END", "\n\n"]);
-    assert!(report.losses.is_empty(), "unexpected losses: {:?}", loss_paths(&report));
+    assert!(
+        report.losses.is_empty(),
+        "unexpected losses: {:?}",
+        loss_paths(&report)
+    );
 }
 
 #[test]
@@ -98,12 +102,20 @@ fn decodes_media_parts_and_reasoning() {
         ]
     });
     let (req, report) = decode(&body);
-    assert!(report.losses.is_empty(), "losses: {:?}", loss_paths(&report));
+    assert!(
+        report.losses.is_empty(),
+        "losses: {:?}",
+        loss_paths(&report)
+    );
 
     let parts = &req.messages[0].content;
     assert_eq!(parts.len(), 5);
     match &parts[1] {
-        ContentPart::Media { kind, source, detail } => {
+        ContentPart::Media {
+            kind,
+            source,
+            detail,
+        } => {
             assert_eq!(*kind, MediaKind::Image);
             match source {
                 MediaSource::Inline { media_type, data } => {
@@ -117,7 +129,10 @@ fn decodes_media_parts_and_reasoning() {
         other => panic!("expected image, got {other:?}"),
     }
     match &parts[2] {
-        ContentPart::Media { source: MediaSource::Url(u), .. } => {
+        ContentPart::Media {
+            source: MediaSource::Url(u),
+            ..
+        } => {
             assert_eq!(u, "https://img.test/pic.png");
         }
         other => panic!("expected url image, got {other:?}"),
@@ -133,7 +148,11 @@ fn decodes_media_parts_and_reasoning() {
         other => panic!("expected audio, got {other:?}"),
     }
     match &parts[4] {
-        ContentPart::Media { kind, source: MediaSource::Resource(id), .. } => {
+        ContentPart::Media {
+            kind,
+            source: MediaSource::Resource(id),
+            ..
+        } => {
             assert_eq!(*kind, MediaKind::File);
             assert_eq!(id, "file-9");
         }
@@ -172,7 +191,10 @@ fn unclaimed_fields_preserve_into_extensions_with_losses() {
         "request.presence_penalty",
         "request.stream_options",
     ] {
-        assert!(paths.iter().any(|p| p == expected), "missing loss {expected} in {paths:?}");
+        assert!(
+            paths.iter().any(|p| p == expected),
+            "missing loss {expected} in {paths:?}"
+        );
     }
     assert_eq!(report.source, Protocol::OpenAiChatCompletions);
 }
@@ -220,7 +242,9 @@ fn encodes_output_as_chat_completion() {
                 opaque: json!({"reasoning_content": "steps"}),
                 summary: Some("steps".into()),
             }),
-            ContentPart::Text { text: "done".into() },
+            ContentPart::Text {
+                text: "done".into(),
+            },
             ContentPart::ToolCall(ToolCall {
                 id: "call_9".into(),
                 name: "f".into(),
@@ -239,7 +263,11 @@ fn encodes_output_as_chat_completion() {
         extensions: Map::from_iter([("system_fingerprint".into(), json!("fp_1"))]),
     };
     let (v, report) = encode_chat_output(WireDialect::OpenAiChatCompletions, &out, "m");
-    assert!(report.losses.is_empty(), "losses: {:?}", loss_paths(&report));
+    assert!(
+        report.losses.is_empty(),
+        "losses: {:?}",
+        loss_paths(&report)
+    );
 
     assert!(v["id"].as_str().unwrap().starts_with("chatcmpl-"));
     assert_eq!(v["object"], "chat.completion");
@@ -257,7 +285,10 @@ fn encodes_output_as_chat_completion() {
     assert_eq!(v["usage"]["prompt_tokens"], 5);
     assert_eq!(v["usage"]["completion_tokens"], 9);
     assert_eq!(v["usage"]["total_tokens"], 14);
-    assert_eq!(v["usage"]["completion_tokens_details"]["reasoning_tokens"], 4);
+    assert_eq!(
+        v["usage"]["completion_tokens_details"]["reasoning_tokens"],
+        4
+    );
 }
 
 #[test]
@@ -274,7 +305,9 @@ fn encode_reports_media_and_foreign_reasoning() {
                 opaque: json!({"type": "thinking", "signature": "sig"}),
                 summary: Some("thought".into()),
             }),
-            ContentPart::Text { text: "answer".into() },
+            ContentPart::Text {
+                text: "answer".into(),
+            },
         ],
         stop: Some(StopReason::Paused),
         ..Default::default()
@@ -317,20 +350,47 @@ fn stream_encodes_chunks_and_done() {
     let mut enc = stream_encoder(dialect, "m");
 
     let events = [
-        StreamEvent::PartStarted { index: 0, kind: PartKind::Reasoning },
-        StreamEvent::ReasoningDelta { index: 0, text: "th".into() },
-        StreamEvent::PartStarted { index: 1, kind: PartKind::Text },
-        StreamEvent::TextDelta { index: 1, text: "Hel".into() },
-        StreamEvent::TextDelta { index: 1, text: "lo".into() },
-        StreamEvent::ToolCallStarted { index: 2, id: "call_1".into(), name: "lookup".into() },
-        StreamEvent::ToolCallDelta { index: 2, arguments: "{\"q\":".into() },
-        StreamEvent::ToolCallDelta { index: 2, arguments: "\"x\"}".into() },
+        StreamEvent::PartStarted {
+            index: 0,
+            kind: PartKind::Reasoning,
+        },
+        StreamEvent::ReasoningDelta {
+            index: 0,
+            text: "th".into(),
+        },
+        StreamEvent::PartStarted {
+            index: 1,
+            kind: PartKind::Text,
+        },
+        StreamEvent::TextDelta {
+            index: 1,
+            text: "Hel".into(),
+        },
+        StreamEvent::TextDelta {
+            index: 1,
+            text: "lo".into(),
+        },
+        StreamEvent::ToolCallStarted {
+            index: 2,
+            id: "call_1".into(),
+            name: "lookup".into(),
+        },
+        StreamEvent::ToolCallDelta {
+            index: 2,
+            arguments: "{\"q\":".into(),
+        },
+        StreamEvent::ToolCallDelta {
+            index: 2,
+            arguments: "\"x\"}".into(),
+        },
         StreamEvent::Usage(Usage {
             input_tokens: Some(3),
             output_tokens: Some(7),
             ..Default::default()
         }),
-        StreamEvent::Finished { stop: Some(StopReason::ToolUse) },
+        StreamEvent::Finished {
+            stop: Some(StopReason::ToolUse),
+        },
     ];
     let mut frames = Vec::new();
     for e in &events {
@@ -347,7 +407,10 @@ fn stream_encodes_chunks_and_done() {
     assert_eq!(first["model"], "m");
 
     let chunk = |f: &SseEvent| serde_json::from_str::<serde_json::Value>(&f.data).unwrap();
-    assert_eq!(chunk(&frames[1])["choices"][0]["delta"]["reasoning_content"], "th");
+    assert_eq!(
+        chunk(&frames[1])["choices"][0]["delta"]["reasoning_content"],
+        "th"
+    );
     assert_eq!(chunk(&frames[2])["choices"][0]["delta"]["content"], "Hel");
     assert_eq!(chunk(&frames[3])["choices"][0]["delta"]["content"], "lo");
     let tc = chunk(&frames[4])["choices"][0]["delta"]["tool_calls"][0].clone();
@@ -355,14 +418,23 @@ fn stream_encodes_chunks_and_done() {
     assert_eq!(tc["id"], "call_1");
     assert_eq!(tc["type"], "function");
     assert_eq!(tc["function"]["name"], "lookup");
-    assert_eq!(chunk(&frames[5])["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"], "{\"q\":");
-    assert_eq!(chunk(&frames[6])["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"], "\"x\"}");
+    assert_eq!(
+        chunk(&frames[5])["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"],
+        "{\"q\":"
+    );
+    assert_eq!(
+        chunk(&frames[6])["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"],
+        "\"x\"}"
+    );
     // Usage rides a chunk with empty choices.
     let usage = chunk(&frames[7]);
     assert!(usage["choices"].as_array().unwrap().is_empty());
     assert_eq!(usage["usage"]["total_tokens"], 10);
     // The finish chunk carries the mapped reason, then [DONE].
-    assert_eq!(chunk(&frames[8])["choices"][0]["finish_reason"], "tool_calls");
+    assert_eq!(
+        chunk(&frames[8])["choices"][0]["finish_reason"],
+        "tool_calls"
+    );
     assert_eq!(frames[9].data, "[DONE]");
     assert_eq!(frames[9].event, None);
     // finish is idempotent.
@@ -396,7 +468,11 @@ fn round_trip_request_is_identity_on_representable_inputs() {
         "stop": ["END"]
     });
     let (req, report) = decode(&body);
-    assert!(report.losses.is_empty(), "losses: {:?}", loss_paths(&report));
+    assert!(
+        report.losses.is_empty(),
+        "losses: {:?}",
+        loss_paths(&report)
+    );
 
     // Re-encode through the outbound protocol codec: the round trip is
     // identity on every representable field.

@@ -323,11 +323,9 @@ pub(crate) fn parse_media_source(path: &str, url: &str) -> Result<MediaSource, E
             let (meta, data) = rest
                 .split_once(',')
                 .ok_or_else(|| Error::Protocol(format!("{path}: malformed data URI")))?;
-            let media_type = meta
-                .strip_suffix(";base64")
-                .ok_or_else(|| {
-                    Error::Protocol(format!("{path}: data URI is not base64-encoded"))
-                })?;
+            let media_type = meta.strip_suffix(";base64").ok_or_else(|| {
+                Error::Protocol(format!("{path}: data URI is not base64-encoded"))
+            })?;
             Ok(MediaSource::Inline {
                 media_type: if media_type.is_empty() {
                     "application/octet-stream".into()

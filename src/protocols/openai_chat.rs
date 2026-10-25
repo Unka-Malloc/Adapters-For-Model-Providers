@@ -121,7 +121,11 @@ fn encode_assistant(parts: &[&ContentPart]) -> Result<Value, Error> {
     }
     msg.insert(
         "content".into(),
-        if text.is_empty() { Value::Null } else { text.into() },
+        if text.is_empty() {
+            Value::Null
+        } else {
+            text.into()
+        },
     );
     if !tool_calls.is_empty() {
         msg.insert("tool_calls".into(), tool_calls.into());
@@ -132,10 +136,7 @@ fn encode_assistant(parts: &[&ContentPart]) -> Result<Value, Error> {
 fn encode_content(parts: &[&ContentPart], role: &str) -> Result<Value, Error> {
     // Collapse to a plain string when everything is text — both shapes are
     // legal, and the string form is the most widely compatible.
-    if parts
-        .iter()
-        .all(|p| matches!(p, ContentPart::Text { .. }))
-    {
+    if parts.iter().all(|p| matches!(p, ContentPart::Text { .. })) {
         let mut text = String::new();
         for p in parts {
             if let ContentPart::Text { text: t } = p {
@@ -154,13 +155,16 @@ fn encode_content(parts: &[&ContentPart], role: &str) -> Result<Value, Error> {
 fn encode_part(part: &ContentPart, role: &str) -> Result<Value, Error> {
     match part {
         ContentPart::Text { text } => Ok(json!({ "type": "text", "text": text })),
-        ContentPart::Media { kind, source, detail } => {
+        ContentPart::Media {
+            kind,
+            source,
+            detail,
+        } => {
             let url = match source {
                 MediaSource::Url(u) => u.clone(),
-                MediaSource::Inline { media_type, data } => format!(
-                    "data:{media_type};base64,{}",
-                    base64_encode(data)
-                ),
+                MediaSource::Inline { media_type, data } => {
+                    format!("data:{media_type};base64,{}", base64_encode(data))
+                }
                 MediaSource::Resource(id) => {
                     return Err(Error::Unsupported(format!(
                         "unresolved resource {id:?}; the adapter resolves resources first"
@@ -190,7 +194,9 @@ fn encode_part(part: &ContentPart, role: &str) -> Result<Value, Error> {
                             ));
                         }
                     };
-                    Ok(json!({ "type": "input_audio", "input_audio": { "data": data, "format": format } }))
+                    Ok(
+                        json!({ "type": "input_audio", "input_audio": { "data": data, "format": format } }),
+                    )
                 }
                 MediaKind::File => Ok(json!({ "type": "file", "file": { "file_id": url } })),
                 MediaKind::Video => Err(Error::Unsupported(
@@ -265,7 +271,9 @@ pub fn decode_response(body: &[u8]) -> Result<Output, Error> {
     }
     if let Some(text) = message["content"].as_str() {
         if !text.is_empty() {
-            parts.push(ContentPart::Text { text: text.to_owned() });
+            parts.push(ContentPart::Text {
+                text: text.to_owned(),
+            });
         }
     }
     if let Some(calls) = message["tool_calls"].as_array() {
@@ -273,7 +281,16 @@ pub fn decode_response(body: &[u8]) -> Result<Output, Error> {
             parts.push(ContentPart::ToolCall(decode_tool_call(tc)?));
         }
     }
-    let claimed = ["id", "object", "created", "model", "choices", "usage", "system_fingerprint", "service_tier"];
+    let claimed = [
+        "id",
+        "object",
+        "created",
+        "model",
+        "choices",
+        "usage",
+        "system_fingerprint",
+        "service_tier",
+    ];
     let mut extensions = Map::new();
     if let Some(obj) = v.as_object() {
         for (k, val) in obj {
@@ -407,10 +424,7 @@ pub fn decode_models(body: &[u8]) -> Result<Vec<ModelInfo>, Error> {
                 .and_then(Value::as_str)
                 .ok_or_else(|| Error::UpstreamProtocol("model entry missing id".into()))?
                 .to_owned();
-            let owned_by = m
-                .get("owned_by")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
+            let owned_by = m.get("owned_by").and_then(Value::as_str).map(str::to_owned);
             let mut extensions = m.as_object().cloned().unwrap_or_default();
             extensions.remove("id");
             extensions.remove("owned_by");
@@ -445,8 +459,14 @@ impl ChatStreamDecoder {
         self.next_part += 1;
         let index = self.next_part - 1;
         let event = match kind {
-            Slot::Text => StreamEvent::PartStarted { index, kind: PartKind::Text },
-            Slot::Reasoning => StreamEvent::PartStarted { index, kind: PartKind::Reasoning },
+            Slot::Text => StreamEvent::PartStarted {
+                index,
+                kind: PartKind::Text,
+            },
+            Slot::Reasoning => StreamEvent::PartStarted {
+                index,
+                kind: PartKind::Reasoning,
+            },
         };
         (index, event)
     }
@@ -552,4 +572,3 @@ impl crate::transport::SseEventDecoder for ChatStreamDecoder {
         Ok(out)
     }
 }
-

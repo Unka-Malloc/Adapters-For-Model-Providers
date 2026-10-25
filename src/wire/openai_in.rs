@@ -173,17 +173,19 @@ fn decode_message(
     if role == Role::Assistant {
         if let Some(calls) = obj.get("tool_calls").and_then(Value::as_array) {
             for (j, tc) in calls.iter().enumerate() {
-                if let Some(part) = decode_tool_call(
-                    &format!("{}.tool_calls[{j}]", path()),
-                    tc,
-                    report,
-                ) {
+                if let Some(part) =
+                    decode_tool_call(&format!("{}.tool_calls[{j}]", path()), tc, report)
+                {
                     content.push(part);
                 }
             }
         }
     } else if obj.get("tool_calls").is_some() {
-        loss(report, LossKind::Unsupported, format!("{}.tool_calls", path()));
+        loss(
+            report,
+            LossKind::Unsupported,
+            format!("{}.tool_calls", path()),
+        );
     }
 
     const CLAIMED: &[&str] = &[
@@ -244,7 +246,9 @@ fn decode_content(
             }
             Ok(out)
         }
-        Some(_) => Err(Error::Protocol(format!("{path}: unsupported content shape"))),
+        Some(_) => Err(Error::Protocol(format!(
+            "{path}: unsupported content shape"
+        ))),
     }
 }
 
@@ -271,7 +275,10 @@ fn decode_part(
             Ok(Some(ContentPart::Media {
                 kind: MediaKind::Image,
                 source,
-                detail: image.get("detail").and_then(Value::as_str).map(str::to_owned),
+                detail: image
+                    .get("detail")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
             }))
         }
         Some("input_audio") => {
@@ -307,7 +314,11 @@ fn decode_part(
             }))
         }
         Some(other) => {
-            loss(report, LossKind::Unsupported, format!("{path} (type {other:?})"));
+            loss(
+                report,
+                LossKind::Unsupported,
+                format!("{path} (type {other:?})"),
+            );
             Ok(None)
         }
         None => {
@@ -317,12 +328,12 @@ fn decode_part(
     }
 }
 
-fn decode_tool_call(
-    path: &str,
-    tc: &Value,
-    report: &mut ConversionReport,
-) -> Option<ContentPart> {
-    if tc.get("type").and_then(Value::as_str).is_some_and(|t| t != "function") {
+fn decode_tool_call(path: &str, tc: &Value, report: &mut ConversionReport) -> Option<ContentPart> {
+    if tc
+        .get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|t| t != "function")
+    {
         loss(report, LossKind::Unsupported, format!("{path}.type"));
         return None;
     }
@@ -358,7 +369,11 @@ fn decode_tool(index: usize, t: &Value, req: &mut ChatRequest, report: &mut Conv
     }
 }
 
-fn decode_tool_choice(choice: Option<&Value>, req: &mut ChatRequest, report: &mut ConversionReport) {
+fn decode_tool_choice(
+    choice: Option<&Value>,
+    req: &mut ChatRequest,
+    report: &mut ConversionReport,
+) {
     let Some(choice) = choice else { return };
     let parsed = match choice {
         Value::String(s) => match s.as_str() {
@@ -381,7 +396,10 @@ fn decode_tool_choice(choice: Option<&Value>, req: &mut ChatRequest, report: &mu
 
 fn decode_sampling(obj: &Map<String, Value>, req: &mut ChatRequest, report: &mut ConversionReport) {
     for (key, slot) in [
-        ("temperature", &mut req.sampling.temperature as &mut Option<f32>),
+        (
+            "temperature",
+            &mut req.sampling.temperature as &mut Option<f32>,
+        ),
         ("top_p", &mut req.sampling.top_p),
     ] {
         if let Some(v) = obj.get(key) {
@@ -468,7 +486,11 @@ pub fn encode_output(output: &Output, model: &str) -> (Value, ConversionReport) 
     }
     message.insert(
         "content".into(),
-        if text.is_empty() { Value::Null } else { text.into() },
+        if text.is_empty() {
+            Value::Null
+        } else {
+            text.into()
+        },
     );
     if !reasoning_text.is_empty() {
         message

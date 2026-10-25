@@ -71,8 +71,9 @@ impl CohereAdapter {
             Credential::ApiKey(secret) | Credential::Bearer { token: secret, .. } => {
                 headers.insert(
                     http::header::AUTHORIZATION,
-                    http::HeaderValue::from_str(&format!("Bearer {}", secret.expose()))
-                        .map_err(|_| Error::Credential("credential is not a valid header value".into()))?,
+                    http::HeaderValue::from_str(&format!("Bearer {}", secret.expose())).map_err(
+                        |_| Error::Credential("credential is not a valid header value".into()),
+                    )?,
                 );
             }
             Credential::Cloud { .. } => {
@@ -91,7 +92,11 @@ impl CohereAdapter {
 
     /// Resolve `MediaSource::Resource` parts into inline data through the
     /// host effect port before the request enters the codec.
-    async fn resolve_media(&self, req: &mut ChatRequest, ctrl: &RequestControl) -> Result<(), Error> {
+    async fn resolve_media(
+        &self,
+        req: &mut ChatRequest,
+        ctrl: &RequestControl,
+    ) -> Result<(), Error> {
         let needs_resolve = req.messages.iter().any(|m| {
             m.content.iter().any(|p| {
                 matches!(
@@ -112,7 +117,10 @@ impl CohereAdapter {
             .ok_or_else(|| Error::Unsupported("media resources need a host effect port".into()))?;
         for m in &mut req.messages {
             for part in &mut m.content {
-                if let ContentPart::Media { kind: _, source, .. } = part {
+                if let ContentPart::Media {
+                    kind: _, source, ..
+                } = part
+                {
                     if let MediaSource::Resource(id) = source {
                         let mut rr = ResourceRef {
                             id: id.clone(),
@@ -186,8 +194,7 @@ impl CohereAdapter {
             // Drain the error body before building the error.
             let mut body = Vec::new();
             let mut stream = res.body;
-            while let Some(chunk) = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await
-            {
+            while let Some(chunk) = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await {
                 match chunk {
                     Ok(b) => body.extend_from_slice(&b),
                     Err(e) => return Err(e),
@@ -240,7 +247,11 @@ impl Adapter for CohereAdapter {
     }
 
     /// `POST /v2/embed` — text or image embeddings.
-    async fn embed(&self, mut req: EmbedRequest, ctrl: &RequestControl) -> Result<EmbedOutput, Error> {
+    async fn embed(
+        &self,
+        mut req: EmbedRequest,
+        ctrl: &RequestControl,
+    ) -> Result<EmbedOutput, Error> {
         self.resolve_embed_media(&mut req, ctrl).await?;
         let headers = self.authenticate().await?;
         let body = cohere::build_embed_request(&req)?;
@@ -253,7 +264,11 @@ impl Adapter for CohereAdapter {
     }
 
     /// `POST /v2/rerank` — document reranking.
-    async fn rerank(&self, req: RerankRequest, ctrl: &RequestControl) -> Result<RerankOutput, Error> {
+    async fn rerank(
+        &self,
+        req: RerankRequest,
+        ctrl: &RequestControl,
+    ) -> Result<RerankOutput, Error> {
         let headers = self.authenticate().await?;
         let body = cohere::build_rerank_request(&req)?;
         let mut http = HttpRequest::post_json(self.target.endpoint("v2/rerank"), body);

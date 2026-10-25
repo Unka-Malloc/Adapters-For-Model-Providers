@@ -10,8 +10,8 @@
 use serde_json::{Map, Value, json};
 
 use crate::api::*;
-use crate::protocols::{base64_decode, base64_encode};
 use crate::protocols::openai_chat::provider_error;
+use crate::protocols::{base64_decode, base64_encode};
 
 /// The realtime handshake URL: `{base}/realtime?model=…` with the scheme
 /// mapped `https`→`wss`, `http`→`ws` (an already-`ws(s)` base is kept).
@@ -77,7 +77,10 @@ impl RealtimeEncoder {
                     "content": [{ "type": "input_text", "text": text }],
                 },
             })]),
-            RealtimeInput::Audio { data, media_type: _ } => {
+            RealtimeInput::Audio {
+                data,
+                media_type: _,
+            } => {
                 // The wire append carries only base64 audio; the format is
                 // session-level (`input_audio_format`), so `media_type`
                 // describes the caller's bytes but has no frame field.
@@ -153,9 +156,9 @@ impl RealtimeDecoder {
         let ty = v["type"].as_str().unwrap_or_default();
         match ty {
             "error" => Err(provider_error(None, &v)),
-            "response.text.delta" | "response.output_text.delta" => Ok(vec![
-                RealtimeEvent::Text(delta_str(&v).to_owned()),
-            ]),
+            "response.text.delta" | "response.output_text.delta" => {
+                Ok(vec![RealtimeEvent::Text(delta_str(&v).to_owned())])
+            }
             "response.audio.delta" | "response.output_audio.delta" => {
                 Ok(vec![RealtimeEvent::Audio {
                     data: base64_decode(delta_str(&v))?,
@@ -164,23 +167,21 @@ impl RealtimeDecoder {
             }
             "response.audio_transcript.delta"
             | "response.output_audio_transcript.delta"
-            | "conversation.item.input_audio_transcription.delta" => Ok(vec![
-                RealtimeEvent::Transcript {
+            | "conversation.item.input_audio_transcription.delta" => {
+                Ok(vec![RealtimeEvent::Transcript {
                     text: delta_str(&v).to_owned(),
                     final_: false,
-                },
-            ]),
+                }])
+            }
             "response.audio_transcript.done"
             | "response.output_audio_transcript.done"
-            | "conversation.item.input_audio_transcription.completed" => Ok(vec![
-                RealtimeEvent::Transcript {
+            | "conversation.item.input_audio_transcription.completed" => {
+                Ok(vec![RealtimeEvent::Transcript {
                     text: v["transcript"].as_str().unwrap_or_default().to_owned(),
                     final_: true,
-                },
-            ]),
-            "conversation.item.input_audio_transcription.failed" => {
-                Err(provider_error(None, &v))
+                }])
             }
+            "conversation.item.input_audio_transcription.failed" => Err(provider_error(None, &v)),
             "response.function_call_arguments.delta" => Ok(vec![RealtimeEvent::Native(v)]),
             "response.function_call_arguments.done" => {
                 let arguments = match &v["arguments"] {
@@ -217,7 +218,10 @@ fn delta_str(v: &Value) -> &str {
 fn decode_usage(u: &Map<String, Value>) -> Usage {
     let mut extensions = Map::new();
     for (k, v) in u {
-        if !matches!(k.as_str(), "input_tokens" | "output_tokens" | "total_tokens") {
+        if !matches!(
+            k.as_str(),
+            "input_tokens" | "output_tokens" | "total_tokens"
+        ) {
             extensions.insert(k.clone(), v.clone());
         }
     }

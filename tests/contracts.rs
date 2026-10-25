@@ -162,7 +162,9 @@ async fn adapter_defaults_report_unsupported() {
         url::Url::parse("https://example.test").unwrap(),
     );
     let a = Dummy(target);
-    let err = a.chat(ChatRequest::default(), &RequestControl::default()).await;
+    let err = a
+        .chat(ChatRequest::default(), &RequestControl::default())
+        .await;
     assert!(matches!(err, Err(Error::Unsupported(_))));
     let err = a
         .open_realtime(RealtimeConfig::default(), &RequestControl::default())
@@ -204,7 +206,11 @@ fn device_grant_debug_redacts_codes_and_raw_response() {
 #[test]
 fn http_request_and_response_debug_redact_credentials() {
     let mut request = HttpRequest::get(
-        url::Url::parse(&format!("https://api.example.test/v1/chat?key={}", common::run_token("query"))).unwrap(),
+        url::Url::parse(&format!(
+            "https://api.example.test/v1/chat?key={}",
+            common::run_token("query")
+        ))
+        .unwrap(),
     );
     request.headers.insert(
         http::header::AUTHORIZATION,
@@ -224,7 +230,10 @@ fn http_request_and_response_debug_redact_credentials() {
         http::header::CONTENT_TYPE,
         http::HeaderValue::from_static("application/json"),
     );
-    request.body = bytes::Bytes::from(format!(r#"{{"prompt":"{}"}}"#, common::run_token("request-body")));
+    request.body = bytes::Bytes::from(format!(
+        r#"{{"prompt":"{}"}}"#,
+        common::run_token("request-body")
+    ));
     let debug = format!("{request:?}");
     for leaked in [
         common::run_token("query"),
@@ -247,18 +256,25 @@ fn http_request_and_response_debug_redact_credentials() {
     let mut response = HttpResponse {
         status: http::StatusCode::UNAUTHORIZED,
         headers: http::HeaderMap::new(),
-        body: bytes::Bytes::from(format!(r#"{{"error":"{}"}}"#, common::run_token("response-body"))),
+        body: bytes::Bytes::from(format!(
+            r#"{{"error":"{}"}}"#,
+            common::run_token("response-body")
+        )),
     };
     response.headers.insert(
         http::header::AUTHORIZATION,
-        http::HeaderValue::from_str(&format!("Bearer {}", common::run_token("response-header"))).unwrap(),
+        http::HeaderValue::from_str(&format!("Bearer {}", common::run_token("response-header")))
+            .unwrap(),
     );
     response.headers.insert(
         http::header::CONTENT_TYPE,
         http::HeaderValue::from_static("application/json"),
     );
     let debug = format!("{response:?}");
-    for leaked in [common::run_token("response-body"), common::run_token("response-header")] {
+    for leaked in [
+        common::run_token("response-body"),
+        common::run_token("response-header"),
+    ] {
         assert!(
             !debug.contains(leaked),
             "HttpResponse Debug leaked {leaked:?}: {debug}"
@@ -274,11 +290,17 @@ fn process_spec_debug_redacts_arguments_and_environment_values() {
         requirement: "cursor-agent >= 1.2".into(),
         program: "cursor-agent".into(),
         args: vec!["--api-key".into(), common::run_token("argument").into()],
-        env: vec![("CURSOR_API_KEY".into(), common::run_token("environment").into())],
+        env: vec![(
+            "CURSOR_API_KEY".into(),
+            common::run_token("environment").into(),
+        )],
         cwd: Some("workdir".into()),
     };
     let debug = format!("{spec:?}");
-    for leaked in [common::run_token("argument"), common::run_token("environment")] {
+    for leaked in [
+        common::run_token("argument"),
+        common::run_token("environment"),
+    ] {
         assert!(
             !debug.contains(leaked),
             "ProcessSpec Debug leaked {leaked:?}: {debug}"

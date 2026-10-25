@@ -118,9 +118,11 @@ fn encode_user(parts: &[ContentPart]) -> Result<Vec<Value>, Error> {
     for part in parts {
         match part {
             ContentPart::Text { text } => out.push(json!({ "type": "text", "text": text })),
-            ContentPart::Media { kind, source, detail } => {
-                out.push(encode_media(kind, source, detail)?)
-            }
+            ContentPart::Media {
+                kind,
+                source,
+                detail,
+            } => out.push(encode_media(kind, source, detail)?),
             // Tool results are ordinary user-role content blocks here.
             ContentPart::ToolResult(tr) => out.push(encode_tool_result(tr)?),
             ContentPart::ToolCall(_) => {
@@ -248,9 +250,7 @@ fn encode_tool_result(tr: &ToolResult) -> Result<Value, Error> {
         let mut content = Vec::new();
         for part in &tr.content {
             match part {
-                ContentPart::Text { text } => {
-                    content.push(json!({ "type": "text", "text": text }))
-                }
+                ContentPart::Text { text } => content.push(json!({ "type": "text", "text": text })),
                 ContentPart::Media {
                     kind: MediaKind::Image,
                     source,
@@ -404,10 +404,7 @@ fn decode_usage(u: &Value) -> Usage {
 /// `status` is the HTTP status when known (stream errors may lack one).
 /// Bodies arrive as `{"type":"error","error":{"type":…,"message":…}}`.
 pub fn provider_error(status: Option<u16>, body: &Value) -> Error {
-    let err = body
-        .get("error")
-        .filter(|e| e.is_object())
-        .unwrap_or(body);
+    let err = body.get("error").filter(|e| e.is_object()).unwrap_or(body);
     Error::Provider {
         status,
         code: err["type"]
@@ -490,7 +487,10 @@ impl crate::transport::SseEventDecoder for MessagesStreamDecoder {
             "message_start" => {
                 // The message envelope opens the stream; its usage is the
                 // first accounting and the only event worth surfacing.
-                if let Some(u) = v["message"]["usage"].as_object().map(|_| &v["message"]["usage"]) {
+                if let Some(u) = v["message"]["usage"]
+                    .as_object()
+                    .map(|_| &v["message"]["usage"])
+                {
                     out.push(StreamEvent::Usage(decode_usage(u)));
                 }
             }

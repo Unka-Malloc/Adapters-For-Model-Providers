@@ -19,7 +19,7 @@ fn adapter(transport: MockTransport) -> OpenAiAdapter {
         AuthKind::Bearer,
         Arc::new(transport),
         Arc::new(StaticCredential(Credential::Bearer {
-            token: Secret::new("sk-test"),
+            token: Secret::new(common::run_token("bearer")),
             expires_at: None,
         })),
     )
@@ -49,7 +49,9 @@ async fn responses_request_builds_input_items_and_tools() {
                 opaque: json!({"type": "reasoning", "id": "rs_1", "encrypted_content": "enc"}),
                 summary: None,
             }),
-            ContentPart::Text { text: "answer".into() },
+            ContentPart::Text {
+                text: "answer".into(),
+            },
             ContentPart::ToolCall(ToolCall {
                 id: "call_1".into(),
                 name: "f".into(),
@@ -72,19 +74,32 @@ async fn responses_request_builds_input_items_and_tools() {
         strict: false,
     });
     req.parallel_tool_calls = Some(false);
-    req.extensions.insert("reasoning".into(), json!({"effort": "high"}));
+    req.extensions
+        .insert("reasoning".into(), json!({"effort": "high"}));
 
     a.chat(req, &RequestControl::default()).await.unwrap();
 
     let b = body_json(&t.recorded()[0]);
     let input = b["input"].as_array().unwrap();
-    assert_eq!(input[0], json!({"type":"message","role":"system","content":[{"type":"input_text","text":"rule"}]}));
+    assert_eq!(
+        input[0],
+        json!({"type":"message","role":"system","content":[{"type":"input_text","text":"rule"}]})
+    );
     assert_eq!(input[1]["role"], "user");
     // Assistant turn: reasoning item replayed verbatim + message + function_call item.
-    assert_eq!(input[2], json!({"type":"reasoning","id":"rs_1","encrypted_content":"enc"}));
+    assert_eq!(
+        input[2],
+        json!({"type":"reasoning","id":"rs_1","encrypted_content":"enc"})
+    );
     assert_eq!(input[3]["content"][0]["type"], "output_text");
-    assert_eq!(input[4], json!({"type":"function_call","call_id":"call_1","name":"f","arguments":"{\"a\":1}"}));
-    assert_eq!(input[5], json!({"type":"function_call_output","call_id":"call_1","output":"ok"}));
+    assert_eq!(
+        input[4],
+        json!({"type":"function_call","call_id":"call_1","name":"f","arguments":"{\"a\":1}"})
+    );
+    assert_eq!(
+        input[5],
+        json!({"type":"function_call_output","call_id":"call_1","output":"ok"})
+    );
     assert_eq!(b["tools"][0]["type"], "function");
     assert_eq!(b["parallel_tool_calls"], false);
     assert_eq!(b["reasoning"], json!({"effort": "high"}));
@@ -177,7 +192,9 @@ async fn responses_stream_decodes_named_events() {
     for e in &events {
         match e {
             StreamEvent::TextDelta { text: d, .. } => text.push_str(d),
-            StreamEvent::ToolCallStarted { id, name, .. } => tool = Some((id.clone(), name.clone())),
+            StreamEvent::ToolCallStarted { id, name, .. } => {
+                tool = Some((id.clone(), name.clone()))
+            }
             StreamEvent::ToolCallDelta { arguments, .. } => args.push_str(arguments),
             StreamEvent::Usage(u) => usage = u.output_tokens == Some(5),
             StreamEvent::Finished { stop } => finish = matches!(stop, Some(StopReason::Complete)),
@@ -186,10 +203,7 @@ async fn responses_stream_decodes_named_events() {
     }
     assert_eq!(text, "Hello");
     assert_eq!(args, "{\"q\":\"x\"}");
-    assert_eq!(
-        tool,
-        Some(("call_3".to_string(), "lookup".to_string()))
-    );
+    assert_eq!(tool, Some(("call_3".to_string(), "lookup".to_string())));
     assert!(usage);
     assert!(finish);
 }
@@ -203,8 +217,7 @@ fn frame(event: &str, data: serde_json::Value) -> a4mp::SseEvent {
 }
 
 fn decode_frames(frames: &[a4mp::SseEvent]) -> Vec<StreamEvent> {
-    let mut decoder =
-        a4mp::protocols::openai_responses::ResponsesStreamDecoder::new();
+    let mut decoder = a4mp::protocols::openai_responses::ResponsesStreamDecoder::new();
     let mut events = Vec::new();
     for f in frames {
         events.extend(decoder.decode(f).unwrap());
@@ -250,10 +263,22 @@ fn stream_done_only_text_frames_backfill_missing_deltas() {
             .count(),
         1
     );
-    assert!(events.iter().any(|e| matches!(e, StreamEvent::PartFinished { .. })));
-    assert!(events.iter().any(|e| matches!(e, StreamEvent::Finished { .. })));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::PartFinished { .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Finished { .. }))
+    );
     // Envelopes and done events are consumed, not leaked as Native.
-    assert!(!events.iter().any(|e| matches!(e, StreamEvent::Native { .. })));
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::Native { .. }))
+    );
 }
 
 #[test]
@@ -379,7 +404,10 @@ fn stream_item_done_only_function_call_keeps_identity_and_arguments() {
 
     assert!(matches!(
         &events[0],
-        StreamEvent::PartStarted { index: 0, kind: PartKind::ToolCall }
+        StreamEvent::PartStarted {
+            index: 0,
+            kind: PartKind::ToolCall
+        }
     ));
     assert!(matches!(
         &events[1],
@@ -394,7 +422,11 @@ fn stream_item_done_only_function_call_keeps_identity_and_arguments() {
         })
         .collect();
     assert_eq!(args, "{\"a\":1}");
-    assert!(events.iter().any(|e| matches!(e, StreamEvent::PartFinished { index: 0 })));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::PartFinished { index: 0 }))
+    );
 }
 
 #[test]
@@ -415,7 +447,10 @@ fn stream_reasoning_done_only_keeps_text() {
 
     assert!(matches!(
         &events[0],
-        StreamEvent::PartStarted { index: 0, kind: PartKind::Reasoning }
+        StreamEvent::PartStarted {
+            index: 0,
+            kind: PartKind::Reasoning
+        }
     ));
     let reasoning: String = events
         .iter()
@@ -425,7 +460,11 @@ fn stream_reasoning_done_only_keeps_text() {
         })
         .collect();
     assert_eq!(reasoning, "thought");
-    assert!(events.iter().any(|e| matches!(e, StreamEvent::PartFinished { index: 0 })));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::PartFinished { index: 0 }))
+    );
 }
 
 #[test]

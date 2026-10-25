@@ -6,9 +6,9 @@
 //! Every partition accrues independently — a profile's presence is a
 //! supported access surface, never a live-availability claim.
 
+mod directory;
 mod major;
 mod observed;
-mod directory;
 
 /// The complete reconciled profile set.
 pub fn builtin_profiles() -> Vec<super::ProviderProfile> {

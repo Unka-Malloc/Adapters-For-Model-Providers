@@ -69,10 +69,9 @@ impl BedrockAdapter {
             Credential::ApiKey(secret) | Credential::Bearer { token: secret, .. } => {
                 headers.insert(
                     http::header::AUTHORIZATION,
-                    http::HeaderValue::from_str(&format!("Bearer {}", secret.expose()))
-                        .map_err(|_| {
-                            Error::Credential("credential is not a valid header value".into())
-                        })?,
+                    http::HeaderValue::from_str(&format!("Bearer {}", secret.expose())).map_err(
+                        |_| Error::Credential("credential is not a valid header value".into()),
+                    )?,
                 );
             }
         }
@@ -92,7 +91,11 @@ impl BedrockAdapter {
     /// Resolve `MediaSource::Resource` parts into inline data through the
     /// host effect port before the request enters the codec. The codec
     /// infers the image format from the resolved bytes.
-    async fn resolve_media(&self, req: &mut ChatRequest, ctrl: &RequestControl) -> Result<(), Error> {
+    async fn resolve_media(
+        &self,
+        req: &mut ChatRequest,
+        ctrl: &RequestControl,
+    ) -> Result<(), Error> {
         let needs_resolve = req.messages.iter().any(|m| {
             m.content.iter().any(|p| {
                 matches!(
@@ -113,7 +116,10 @@ impl BedrockAdapter {
             .ok_or_else(|| Error::Unsupported("media resources need a host effect port".into()))?;
         for m in &mut req.messages {
             for part in &mut m.content {
-                if let ContentPart::Media { kind: _, source, .. } = part {
+                if let ContentPart::Media {
+                    kind: _, source, ..
+                } = part
+                {
                     if let MediaSource::Resource(id) = source {
                         let mut rr = ResourceRef {
                             id: id.clone(),
@@ -160,8 +166,7 @@ impl BedrockAdapter {
             // Drain the error body before building the error.
             let mut body = Vec::new();
             let mut stream = res.body;
-            while let Some(chunk) = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await
-            {
+            while let Some(chunk) = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await {
                 match chunk {
                     Ok(b) => body.extend_from_slice(&b),
                     Err(e) => return Err(e),

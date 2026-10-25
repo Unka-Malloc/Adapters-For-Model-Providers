@@ -78,13 +78,11 @@ impl SigV4 {
         now: SystemTime,
     ) -> Result<(), Error> {
         let (token, context) = match cred {
-            Credential::Cloud {
-                token, context, ..
-            } => (token, context),
+            Credential::Cloud { token, context, .. } => (token, context),
             _ => {
                 return Err(Error::Credential(
                     "sigv4: expected Credential::Cloud material".into(),
-                ))
+                ));
             }
         };
         let access_key_id = ctx_str(context, CTX_ACCESS_KEY_ID).ok_or_else(|| {
@@ -116,15 +114,15 @@ impl SigV4 {
         req.headers.remove(HDR_PAYLOAD_SHA);
         req.headers.remove("x-amz-security-token");
         req.headers.insert(http::header::HOST, header_value(&host)?);
-        req.headers.insert("x-amz-date", header_value(&time.amz_date)?);
-        req.headers.insert(HDR_PAYLOAD_SHA, header_value(&payload_hash)?);
+        req.headers
+            .insert("x-amz-date", header_value(&time.amz_date)?);
+        req.headers
+            .insert(HDR_PAYLOAD_SHA, header_value(&payload_hash)?);
         if let Some(session_token) = session_token {
             req.headers.insert(
                 "x-amz-security-token",
                 header_value(session_token).map_err(|_| {
-                    Error::Credential(
-                        "sigv4: session_token is not a valid header value".into(),
-                    )
+                    Error::Credential("sigv4: session_token is not a valid header value".into())
                 })?,
             );
         }
@@ -202,9 +200,8 @@ fn ctx_str<'a>(
 /// Build a header value; the input is never echoed into the error because
 /// callers pass material that may be sensitive (session tokens, authz).
 fn header_value(s: &str) -> Result<http::HeaderValue, Error> {
-    http::HeaderValue::from_str(s).map_err(|_| {
-        Error::Protocol("sigv4: signing field is not a valid header value".into())
-    })
+    http::HeaderValue::from_str(s)
+        .map_err(|_| Error::Protocol("sigv4: signing field is not a valid header value".into()))
 }
 
 fn hmac(key: &[u8], data: &[u8]) -> [u8; 32] {
@@ -376,7 +373,9 @@ fn canonical_headers(headers: &http::HeaderMap) -> (String, String) {
                 .split_whitespace()
                 .collect::<Vec<_>>()
                 .join(" ");
-            map.entry(name.as_str().to_owned()).or_default().push(normalized);
+            map.entry(name.as_str().to_owned())
+                .or_default()
+                .push(normalized);
         }
     }
     let mut canonical = String::new();

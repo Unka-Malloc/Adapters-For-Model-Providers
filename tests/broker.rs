@@ -91,15 +91,17 @@ fn header<'a>(req: &'a common::RecordedRequest, name: &str) -> &'a str {
 
 #[tokio::test]
 async fn copilot_login_runs_device_grant_into_session_token() {
+    let access = common::fixture_token("github");
+    let session = common::fixture_token("copilot");
     let transport = MockTransport::new();
     transport
         // Device authorization.
         .push(Response::Json(
             200,
             serde_json::json!({
-                "device_code": "dev-gh-1", "user_code": "ABCD-EFGH",
+                "device_code": common::run_token("github-device"), "user_code": common::run_token("github-user-code"),
                 "verification_uri": "https://github.com/login/device",
-                "verification_uri_complete": "https://github.com/login/device?user_code=ABCD-EFGH",
+                "verification_uri_complete": format!("https://github.com/login/device?user_code={}", common::run_token("github-user-code")).as_str(),
                 "expires_in": 900, "interval": 0
             }),
         ))
@@ -111,14 +113,14 @@ async fn copilot_login_runs_device_grant_into_session_token() {
         .push(Response::Json(
             200,
             serde_json::json!({
-                "access_token": "gho_copilot", "token_type": "bearer", "scope": "read:user"
+                "access_token": access, "token_type": "bearer", "scope": "read:user"
             }),
         ))
         // Copilot session exchange.
         .push(Response::Json(
             200,
             serde_json::json!({
-                "token": "tid=copilot-session", "expires_at": 1_800_000_000,
+                "token": session, "expires_at": 1_800_000_000,
                 "refresh_in": 1500
             }),
         ));
@@ -126,8 +128,8 @@ async fn copilot_login_runs_device_grant_into_session_token() {
 
     let (github, copilot) = copilot_login(&transport, &effects, &ctrl()).await.unwrap();
 
-    assert_eq!(github.access_token.expose(), "gho_copilot");
-    assert_eq!(copilot.token.expose(), "tid=copilot-session");
+    assert_eq!(github.access_token.expose(), access);
+    assert_eq!(copilot.token.expose(), session);
     assert_eq!(
         copilot.expires_at,
         UNIX_EPOCH + Duration::from_secs(1_800_000_000)
@@ -138,15 +140,25 @@ async fn copilot_login_runs_device_grant_into_session_token() {
     // pending poll.
     assert_eq!(
         effects.presented.lock().unwrap()[0].as_str(),
-        "https://github.com/login/device?user_code=ABCD-EFGH"
+        format!(
+            "https://github.com/login/device?user_code={}",
+            common::run_token("github-user-code")
+        )
+        .as_str()
     );
     assert_eq!(*effects.sleeps.lock().unwrap(), 1);
 
     let rec = transport.recorded();
     assert_eq!(rec.len(), 4);
     assert_eq!(rec[0].url.as_str(), "https://github.com/login/device/code");
-    assert_eq!(rec[1].url.as_str(), "https://github.com/login/oauth/access_token");
-    assert_eq!(rec[2].url.as_str(), "https://github.com/login/oauth/access_token");
+    assert_eq!(
+        rec[1].url.as_str(),
+        "https://github.com/login/oauth/access_token"
+    );
+    assert_eq!(
+        rec[2].url.as_str(),
+        "https://github.com/login/oauth/access_token"
+    );
     assert_eq!(
         rec[3].url.as_str(),
         "https://api.github.com/copilot_internal/v2/token"
@@ -156,20 +168,28 @@ async fn copilot_login_runs_device_grant_into_session_token() {
     // must request JSON.
     for req in &rec[..3] {
         assert_eq!(header(req, "accept"), "application/json");
-        assert_eq!(header(req, "content-type"), "application/x-www-form-urlencoded");
+        assert_eq!(
+            header(req, "content-type"),
+            "application/x-www-form-urlencoded"
+        );
     }
     let authorize_body = String::from_utf8(rec[0].body.clone()).unwrap();
     assert!(authorize_body.contains("client_id=Iv1.b507a08c87ecfe98"));
     assert!(authorize_body.contains("scope=read%3Auser"));
     let poll_body = String::from_utf8(rec[1].body.clone()).unwrap();
-    assert!(poll_body.contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"));
-    assert!(poll_body.contains("device_code=dev-gh-1"));
+    assert!(
+        poll_body.contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code")
+    );
+    assert!(poll_body.contains(&format!(
+        "device_code={}",
+        common::run_token("github-device")
+    )));
 
     // The session exchange authenticates with `token <github_token>`
     // and the Copilot editor identification.
     let session = &rec[3];
     assert_eq!(session.method, http::Method::GET);
-    assert_eq!(header(session, "authorization"), "token gho_copilot");
+    assert_eq!(header(session, "authorization"), format!("token {access}"));
     assert_eq!(header(session, "accept"), "application/json");
     assert_eq!(header(session, "editor-version"), "vscode/1.95.0");
     assert_eq!(header(session, "editor-plugin-version"), "copilot/1.250.0");
@@ -177,20 +197,22 @@ async fn copilot_login_runs_device_grant_into_session_token() {
 
 #[tokio::test]
 async fn copilot_session_exchange_sends_github_token_and_editor_headers() {
+    let session_tok = common::fixture_token("session");
+    let github = common::fixture_token("direct");
     let transport = MockTransport::new();
     transport.push(Response::Json(
         200,
-        serde_json::json!({"token": "tid-x", "expires_at": 100, "refresh_in": 60}),
+        serde_json::json!({"token": session_tok, "expires_at": 100, "refresh_in": 60}),
     ));
 
-    let session = copilot_session(&Secret::new("gho_direct"), &transport, &ctrl())
+    let session = copilot_session(&Secret::new(&github), &transport, &ctrl())
         .await
         .unwrap();
-    assert_eq!(session.token.expose(), "tid-x");
+    assert_eq!(session.token.expose(), session_tok);
     assert_eq!(session.expires_at, UNIX_EPOCH + Duration::from_secs(100));
 
     let req = &transport.recorded()[0];
-    assert_eq!(header(req, "authorization"), "token gho_direct");
+    assert_eq!(header(req, "authorization"), format!("token {github}"));
     assert_eq!(header(req, "copilot-integration-id"), "vscode-chat");
     assert!(header(req, "user-agent").starts_with("copilot/"));
 }
@@ -203,7 +225,13 @@ async fn copilot_session_maps_rejections() {
         401,
         serde_json::json!({"message": "bad credentials"}),
     ));
-    match copilot_session(&Secret::new("gho_bad"), &transport, &ctrl()).await {
+    match copilot_session(
+        &Secret::new(common::run_token("rejected-github")),
+        &transport,
+        &ctrl(),
+    )
+    .await
+    {
         Err(Error::Credential(m)) => assert!(m.contains("bad credentials")),
         Err(other) => panic!("expected Credential error, got {other:?}"),
         Ok(_) => panic!("expected Credential error, got session token"),
@@ -215,7 +243,13 @@ async fn copilot_session_maps_rejections() {
         403,
         serde_json::json!({"message": "no Copilot subscription"}),
     ));
-    match copilot_session(&Secret::new("gho_free"), &transport, &ctrl()).await {
+    match copilot_session(
+        &Secret::new(common::run_token("unsubscribed-github")),
+        &transport,
+        &ctrl(),
+    )
+    .await
+    {
         Err(Error::Provider {
             status: Some(403),
             message,
@@ -234,13 +268,13 @@ fn copilot_headers_and_credential_exports() {
     assert_eq!(headers["copilot-integration-id"], "vscode-chat");
 
     let session = CopilotToken {
-        token: Secret::new("tid"),
+        token: Secret::new(common::run_token("copilot-session")),
         expires_at: UNIX_EPOCH + Duration::from_secs(42),
         raw: serde_json::json!({}),
     };
     match copilot_credential(&session) {
         Credential::Bearer { token, expires_at } => {
-            assert_eq!(token.expose(), "tid");
+            assert_eq!(token.expose(), common::run_token("copilot-session"));
             assert_eq!(expires_at, Some(UNIX_EPOCH + Duration::from_secs(42)));
         }
         other => panic!("expected Bearer credential, got {other:?}"),
@@ -249,6 +283,7 @@ fn copilot_headers_and_credential_exports() {
 
 #[tokio::test]
 async fn codex_login_runs_code_flow_and_extracts_account_id() {
+    let refresh = common::fixture_token("codex");
     let access = fake_jwt(serde_json::json!({
         "sub": "user-1",
         "https://api.openai.com/auth": {"chatgpt_account_id": "acct-nested-1"}
@@ -258,7 +293,7 @@ async fn codex_login_runs_code_flow_and_extracts_account_id() {
         200,
         serde_json::json!({
             "access_token": access.expose(), "token_type": "Bearer",
-            "expires_in": 3600, "refresh_token": "rt-codex",
+            "expires_in": 3600, "refresh_token": refresh,
             "id_token": access.expose()
         }),
     ));
@@ -267,7 +302,7 @@ async fn codex_login_runs_code_flow_and_extracts_account_id() {
     let (token, account_id) = codex_login(&transport, &effects, &ctrl()).await.unwrap();
     assert_eq!(account_id, "acct-nested-1");
     assert_eq!(token.access_token.expose(), access.expose());
-    assert_eq!(token.refresh_token.as_ref().unwrap().expose(), "rt-codex");
+    assert_eq!(token.refresh_token.as_ref().unwrap().expose(), refresh);
 
     // The authorize URL carries the documented Codex CLI flow params.
     let presented = &effects.presented.lock().unwrap()[0];
@@ -276,8 +311,16 @@ async fn codex_login_runs_code_flow_and_extracts_account_id() {
         "https://auth.openai.com/oauth/authorize"
     );
     let params: Vec<_> = presented.query_pairs().collect();
-    let get = |k: &str| params.iter().find(|(n, _)| n == k).map(|(_, v)| v.to_string());
-    assert_eq!(get("client_id").as_deref(), Some("app_EMoamEEZ73f0CkXaXp7hrann"));
+    let get = |k: &str| {
+        params
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.to_string())
+    };
+    assert_eq!(
+        get("client_id").as_deref(),
+        Some("app_EMoamEEZ73f0CkXaXp7hrann")
+    );
     assert_eq!(
         get("redirect_uri").as_deref(),
         Some("http://localhost:1455/auth/callback")
@@ -325,7 +368,7 @@ fn codex_account_id_falls_back_to_id_token() {
     // An opaque access token yields nothing; the claim rides the id_token.
     let id = fake_jwt(serde_json::json!({"chatgpt_account_id": "acct-idtok"}));
     let token = oauth_token(
-        &Secret::new("opaque-access"),
+        &Secret::new(common::run_token("non-jwt-access")),
         serde_json::json!({"id_token": id.expose()}),
     );
     assert_eq!(codex_account_id(&token).unwrap(), "acct-idtok");
@@ -360,7 +403,7 @@ fn jwt_claim_walks_paths_and_reports_missing() {
     );
 
     // A non-JWT value is an upstream protocol violation, not a silent null.
-    match jwt_claim(&Secret::new("opaque"), &["top"]) {
+    match jwt_claim(&Secret::new(common::run_token("non-jwt")), &["top"]) {
         Err(Error::UpstreamProtocol(_)) => {}
         other => panic!("expected UpstreamProtocol error, got {other:?}"),
     }

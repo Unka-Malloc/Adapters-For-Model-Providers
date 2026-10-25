@@ -80,7 +80,7 @@ fn adapter(transport: MockTransport) -> CohereAdapter {
         AuthKind::ApiKey,
         Arc::new(transport),
         Arc::new(StaticCredential(Credential::ApiKey(Secret::new(
-            "cohere-test-key",
+            common::run_token("api-key"),
         )))),
     )
     .unwrap()
@@ -115,7 +115,9 @@ async fn chat_request_maps_messages_tools_sampling_and_extensions() {
     req.messages.push(Message {
         role: Role::Assistant,
         content: vec![
-            ContentPart::Text { text: "checking".into() },
+            ContentPart::Text {
+                text: "checking".into(),
+            },
             ContentPart::ToolCall(ToolCall {
                 id: "tc_1".into(),
                 name: "web_search".into(),
@@ -127,7 +129,9 @@ async fn chat_request_maps_messages_tools_sampling_and_extensions() {
         role: Role::User,
         content: vec![ContentPart::ToolResult(ToolResult {
             call_id: "tc_1".into(),
-            content: vec![ContentPart::Text { text: "42 hits".into() }],
+            content: vec![ContentPart::Text {
+                text: "42 hits".into(),
+            }],
             is_error: false,
         })],
     });
@@ -150,11 +154,14 @@ async fn chat_request_maps_messages_tools_sampling_and_extensions() {
     assert_eq!(req.url.path(), "/v2/chat");
     assert_eq!(
         req.headers.get("authorization").unwrap(),
-        "Bearer cohere-test-key"
+        format!("Bearer {}", common::run_token("api-key")).as_str()
     );
     let b = body_json(req);
     assert_eq!(b["model"], "command-r-plus");
-    assert_eq!(b["messages"][0], json!({"role": "system", "content": "be brief"}));
+    assert_eq!(
+        b["messages"][0],
+        json!({"role": "system", "content": "be brief"})
+    );
     assert_eq!(b["messages"][1], json!({"role": "user", "content": "hi"}));
     assert_eq!(b["messages"][2]["role"], "assistant");
     assert_eq!(b["messages"][2]["content"], "checking");
@@ -227,7 +234,10 @@ async fn chat_response_decodes_tool_plan_and_tool_calls() {
         ContentPart::Reasoning(rb) => {
             assert_eq!(rb.protocol, Protocol::Other("cohere".into()));
             assert_eq!(rb.summary.as_deref(), Some("call search then summarize"));
-            assert_eq!(rb.opaque, json!({"tool_plan": "call search then summarize"}));
+            assert_eq!(
+                rb.opaque,
+                json!({"tool_plan": "call search then summarize"})
+            );
         }
         other => panic!("expected reasoning, got {other:?}"),
     }
@@ -316,16 +326,11 @@ async fn chat_stream_decodes_sse_parts_tools_and_usage() {
                 args.push_str(arguments);
             }
             StreamEvent::Usage(u) => usage_input = u.input_tokens,
-            StreamEvent::Finished { stop } => {
-                finished = matches!(stop, Some(StopReason::ToolUse))
-            }
+            StreamEvent::Finished { stop } => finished = matches!(stop, Some(StopReason::ToolUse)),
             _ => {}
         }
     }
-    assert_eq!(
-        started,
-        [(0, PartKind::Text), (1, PartKind::Reasoning)]
-    );
+    assert_eq!(started, [(0, PartKind::Text), (1, PartKind::Reasoning)]);
     assert_eq!(finished_parts, [0, 2]);
     assert_eq!(text, "Hello");
     assert_eq!(plan, "search first");
@@ -461,10 +466,7 @@ async fn rerank_request_and_hits_preserve_document_echoes() {
     assert_eq!(out.results[0].score, 0.91);
     assert_eq!(out.results[1].index, 2);
     // Per-hit fields with no canonical slot stay verbatim in extensions.
-    assert_eq!(
-        out.extensions["results"][0]["document"]["text"],
-        "d1"
-    );
+    assert_eq!(out.extensions["results"][0]["document"]["text"], "d1");
     let usage = out.usage.unwrap();
     assert_eq!(usage.extensions["billed_units"]["search_units"], 1);
 }
@@ -550,7 +552,10 @@ async fn classify_rejects_closed_label_lists() {
         labels: vec!["positive".into(), "negative".into()],
         extensions: Default::default(),
     };
-    let err = a.classify(req, &RequestControl::default()).await.unwrap_err();
+    let err = a
+        .classify(req, &RequestControl::default())
+        .await
+        .unwrap_err();
     assert!(matches!(err, Error::Unsupported(_)));
     assert!(t.recorded().is_empty());
 }
@@ -593,7 +598,9 @@ fn adapter_rejects_foreign_protocols() {
         target,
         AuthKind::ApiKey,
         Arc::new(MockTransport::new()),
-        Arc::new(StaticCredential(Credential::ApiKey(Secret::new("k")))),
+        Arc::new(StaticCredential(Credential::ApiKey(Secret::new(
+            common::run_token("api-key"),
+        )))),
     );
     match result {
         Err(Error::Unsupported(_)) => {}

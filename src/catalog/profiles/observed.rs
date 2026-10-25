@@ -73,9 +73,20 @@ pub fn profiles() -> Vec<ProviderProfile> {
             auth: vec![AuthSpec::ApiKey, AuthSpec::CloudIdentity],
             // Any commercial region substitutes: bedrock-runtime.{region}.amazonaws.com
             targets: vec![
-                region(BEDROCK, "https://bedrock-runtime.us-east-1.amazonaws.com", "us-east-1"),
-                region(CHAT, "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1", "us-east-1"),
-                anthropic_region("https://bedrock-runtime.us-east-1.amazonaws.com/anthropic", "us-east-1"),
+                region(
+                    BEDROCK,
+                    "https://bedrock-runtime.us-east-1.amazonaws.com",
+                    "us-east-1",
+                ),
+                region(
+                    CHAT,
+                    "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1",
+                    "us-east-1",
+                ),
+                anthropic_region(
+                    "https://bedrock-runtime.us-east-1.amazonaws.com/anthropic",
+                    "us-east-1",
+                ),
             ],
             catalogue: Some("amazon-bedrock"),
         },
@@ -86,9 +97,20 @@ pub fn profiles() -> Vec<ProviderProfile> {
             auth: vec![AuthSpec::ApiKey, AuthSpec::CloudIdentity],
             // Any served region substitutes: bedrock-mantle.{region}.api.aws
             targets: vec![
-                region(CHAT, "https://bedrock-mantle.us-east-1.api.aws/v1", "us-east-1"),
-                region(RESP, "https://bedrock-mantle.us-east-1.api.aws/v1", "us-east-1"),
-                anthropic_region("https://bedrock-mantle.us-east-1.api.aws/anthropic", "us-east-1"),
+                region(
+                    CHAT,
+                    "https://bedrock-mantle.us-east-1.api.aws/v1",
+                    "us-east-1",
+                ),
+                region(
+                    RESP,
+                    "https://bedrock-mantle.us-east-1.api.aws/v1",
+                    "us-east-1",
+                ),
+                anthropic_region(
+                    "https://bedrock-mantle.us-east-1.api.aws/anthropic",
+                    "us-east-1",
+                ),
             ],
             catalogue: Some("bedrock-mantle"),
         },
@@ -98,7 +120,11 @@ pub fn profiles() -> Vec<ProviderProfile> {
             aliases: &["vertex"],
             auth: vec![AuthSpec::CloudIdentity, AuthSpec::ApiKey],
             // Global endpoint; regional endpoints {location}-aiplatform.googleapis.com substitute.
-            targets: vec![region(native("google-vertex"), "https://aiplatform.googleapis.com", "global")],
+            targets: vec![region(
+                native("google-vertex"),
+                "https://aiplatform.googleapis.com",
+                "global",
+            )],
             catalogue: Some("google-vertex"),
         },
         ProviderProfile {
@@ -161,12 +187,30 @@ pub fn profiles() -> Vec<ProviderProfile> {
             auth: KEY.to_vec(),
             targets: vec![
                 // Sold on the Qwen AI platform…
-                region(CHAT, "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1", "qwen-ai"),
-                anthropic_region("https://token-plan.maas.qianwenaiapi.com/apps/anthropic", "qwen-ai"),
+                region(
+                    CHAT,
+                    "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1",
+                    "qwen-ai",
+                ),
+                anthropic_region(
+                    "https://token-plan.maas.qianwenaiapi.com/apps/anthropic",
+                    "qwen-ai",
+                ),
                 // …and on Alibaba Cloud Bailian, Beijing and Singapore.
-                region(CHAT, "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", "bailian-cn"),
-                anthropic_region("https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic", "bailian-cn"),
-                region(CHAT, "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1", "bailian-intl"),
+                region(
+                    CHAT,
+                    "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+                    "bailian-cn",
+                ),
+                anthropic_region(
+                    "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+                    "bailian-cn",
+                ),
+                region(
+                    CHAT,
+                    "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+                    "bailian-intl",
+                ),
             ],
             catalogue: Some("qwen-token-plan"),
         },
@@ -176,7 +220,11 @@ pub fn profiles() -> Vec<ProviderProfile> {
             aliases: &[],
             auth: KEY.to_vec(),
             targets: vec![
-                region(CHAT, "https://coding-intl.dashscope.aliyuncs.com/v1", "intl"),
+                region(
+                    CHAT,
+                    "https://coding-intl.dashscope.aliyuncs.com/v1",
+                    "intl",
+                ),
                 region(CHAT, "https://coding.dashscope.aliyuncs.com/v1", "cn"),
             ],
             catalogue: Some("alibaba-coding-plan"),
@@ -188,12 +236,27 @@ pub fn profiles() -> Vec<ProviderProfile> {
             auth: KEY.to_vec(),
             targets: vec![
                 // Token Plan (LKEAP) and TokenHub plan/pay-as-you-go surfaces.
-                region(CHAT, "https://api.lkeap.cloud.tencent.com/plan/v3", "plan-cn"),
-                anthropic_region("https://api.lkeap.cloud.tencent.com/plan/anthropic", "plan-cn"),
+                region(
+                    CHAT,
+                    "https://api.lkeap.cloud.tencent.com/plan/v3",
+                    "plan-cn",
+                ),
+                anthropic_region(
+                    "https://api.lkeap.cloud.tencent.com/plan/anthropic",
+                    "plan-cn",
+                ),
                 region(CHAT, "https://tokenhub.tencentmaas.com/v1", "cn"),
                 region(CHAT, "https://tokenhub-intl.tencentmaas.com/v1", "intl"),
-                region(CHAT, "https://tokenhub.tencentmaas.com/plan/v3", "enterprise-cn"),
-                region(CHAT, "https://tokenhub-intl.tencentmaas.com/plan/v3", "enterprise-intl"),
+                region(
+                    CHAT,
+                    "https://tokenhub.tencentmaas.com/plan/v3",
+                    "enterprise-cn",
+                ),
+                region(
+                    CHAT,
+                    "https://tokenhub-intl.tencentmaas.com/plan/v3",
+                    "enterprise-intl",
+                ),
             ],
             catalogue: Some("tencent-cloud"),
         },
@@ -214,7 +277,10 @@ pub fn profiles() -> Vec<ProviderProfile> {
             aliases: &["gemini-cli"],
             auth: OAUTH.to_vec(),
             // Gemini CLI's Code Assist (cloudcode-pa) surface.
-            targets: vec![target(native("cloudcode-pa"), "https://cloudcode-pa.googleapis.com")],
+            targets: vec![target(
+                native("cloudcode-pa"),
+                "https://cloudcode-pa.googleapis.com",
+            )],
             catalogue: Some("gemini"),
         },
         ProviderProfile {
@@ -222,7 +288,10 @@ pub fn profiles() -> Vec<ProviderProfile> {
             name: "Antigravity (account access)",
             aliases: &[],
             auth: OAUTH.to_vec(),
-            targets: vec![target(native("cloudcode-pa"), "https://daily-cloudcode-pa.googleapis.com")],
+            targets: vec![target(
+                native("cloudcode-pa"),
+                "https://daily-cloudcode-pa.googleapis.com",
+            )],
             catalogue: Some("antigravity"),
         },
         ProviderProfile {
@@ -238,7 +307,10 @@ pub fn profiles() -> Vec<ProviderProfile> {
             name: "Solstice",
             aliases: &[],
             auth: OAUTH.to_vec(),
-            targets: vec![target(GEM, "https://generativelanguage.googleapis.com/v1alpha")],
+            targets: vec![target(
+                GEM,
+                "https://generativelanguage.googleapis.com/v1alpha",
+            )],
             catalogue: Some("solstice"),
         },
         // --- Gateways and relays -------------------------------------------
@@ -345,7 +417,10 @@ pub fn profiles() -> Vec<ProviderProfile> {
             name: "TypeSafe Jev",
             aliases: &[],
             auth: KEY.to_vec(),
-            targets: vec![target(native("typesafe-system-one"), "https://api.typesafe.ai/v1")],
+            targets: vec![target(
+                native("typesafe-system-one"),
+                "https://api.typesafe.ai/v1",
+            )],
             catalogue: Some("typesafe"),
         },
         ProviderProfile {
@@ -353,7 +428,10 @@ pub fn profiles() -> Vec<ProviderProfile> {
             name: "Jev · Vercel AI Gateway",
             aliases: &[],
             auth: KEY.to_vec(),
-            targets: vec![target(native("typesafe-system-one"), "https://ai-gateway.vercel.sh/typesafe")],
+            targets: vec![target(
+                native("typesafe-system-one"),
+                "https://ai-gateway.vercel.sh/typesafe",
+            )],
             catalogue: Some("vercel-jev"),
         },
         ProviderProfile {
@@ -361,7 +439,10 @@ pub fn profiles() -> Vec<ProviderProfile> {
             name: "Cloudflare Workers AI · Jev, Clef",
             aliases: &[],
             auth: KEY.to_vec(),
-            targets: vec![target(native("typesafe-system-one"), "https://api.cloudflare.com/client/v4")],
+            targets: vec![target(
+                native("typesafe-system-one"),
+                "https://api.cloudflare.com/client/v4",
+            )],
             catalogue: Some("cloudflare-jev"),
         },
         ProviderProfile {
@@ -371,7 +452,10 @@ pub fn profiles() -> Vec<ProviderProfile> {
             auth: KEY.to_vec(),
             // Workspaces address System One at {WorkspaceId}.{region}.maas.aliyuncs.com;
             // the Token Plan host is the concrete surface.
-            targets: vec![target(native("typesafe-system-one"), "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1")],
+            targets: vec![target(
+                native("typesafe-system-one"),
+                "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+            )],
             catalogue: Some("bailian-decision"),
         },
         ProviderProfile {
@@ -379,7 +463,10 @@ pub fn profiles() -> Vec<ProviderProfile> {
             name: "Qwen Decision Model",
             aliases: &[],
             auth: KEY.to_vec(),
-            targets: vec![target(native("typesafe-system-one"), "https://maas.qianwenaiapi.com/compatible-mode/v1")],
+            targets: vec![target(
+                native("typesafe-system-one"),
+                "https://maas.qianwenaiapi.com/compatible-mode/v1",
+            )],
             catalogue: Some("qwen-decision"),
         },
         // --- Local servers --------------------------------------------------
@@ -414,7 +501,11 @@ pub fn profiles() -> Vec<ProviderProfile> {
             targets: vec![
                 region(CHAT, "https://autoglm-api.autoglm.ai", "global"),
                 region(CHAT, "https://autoglm-api.zhipuai.cn", "cn"),
-                region(CHAT, "https://autoglm-acceleration-api.zhipuai.cn", "managed"),
+                region(
+                    CHAT,
+                    "https://autoglm-acceleration-api.zhipuai.cn",
+                    "managed",
+                ),
             ],
             catalogue: Some("autoclaw"),
         },
@@ -423,7 +514,10 @@ pub fn profiles() -> Vec<ProviderProfile> {
             name: "CodeArts",
             aliases: &["huawei-codearts"],
             auth: vec![AuthSpec::CloudIdentity, AuthSpec::OAuth],
-            targets: vec![target(CHAT, "https://snap-access.cn-north-4.myhuaweicloud.com/api/v2")],
+            targets: vec![target(
+                CHAT,
+                "https://snap-access.cn-north-4.myhuaweicloud.com/api/v2",
+            )],
             catalogue: Some("codearts"),
         },
         ProviderProfile {
@@ -486,7 +580,11 @@ pub fn profiles() -> Vec<ProviderProfile> {
             aliases: &[],
             auth: OAUTH.to_vec(),
             // AWS OIDC sign-in; the account's region substitutes runtime.{region}.kiro.dev.
-            targets: vec![region(native("kiro"), "https://runtime.us-east-1.kiro.dev", "us-east-1")],
+            targets: vec![region(
+                native("kiro"),
+                "https://runtime.us-east-1.kiro.dev",
+                "us-east-1",
+            )],
             catalogue: Some("kiro"),
         },
         ProviderProfile {
@@ -539,7 +637,10 @@ pub fn profiles() -> Vec<ProviderProfile> {
             name: "Raccoon",
             aliases: &["xiaohuanxiong"],
             auth: OAUTH.to_vec(),
-            targets: vec![target(native("raccoon"), "https://xiaohuanxiong.com/api/web/llm/v2")],
+            targets: vec![target(
+                native("raccoon"),
+                "https://xiaohuanxiong.com/api/web/llm/v2",
+            )],
             catalogue: Some("raccoon"),
         },
         ProviderProfile {
@@ -573,7 +674,10 @@ pub fn profiles() -> Vec<ProviderProfile> {
             targets: vec![
                 anthropic_region("https://api.z.ai/api/anthropic", "zai"),
                 anthropic_region("https://open.bigmodel.cn/api/anthropic", "bigmodel"),
-                anthropic_region("https://zcode.z.ai/api/v1/zcode-plan/anthropic", "start-plan"),
+                anthropic_region(
+                    "https://zcode.z.ai/api/v1/zcode-plan/anthropic",
+                    "start-plan",
+                ),
             ],
             catalogue: Some("zcode"),
         },

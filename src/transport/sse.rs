@@ -64,12 +64,20 @@ fn find_frame_end(buf: &[u8]) -> Option<(usize, usize)> {
         }
         // "\n\n": LF-terminated line followed by a bare LF.
         if i + 1 < buf.len() && buf[i + 1] == b'\n' {
-            let end = if i > 0 && buf[i - 1] == b'\r' { i - 1 } else { i };
+            let end = if i > 0 && buf[i - 1] == b'\r' {
+                i - 1
+            } else {
+                i
+            };
             return Some((end, i + 2));
         }
         // "\n\r\n": LF-terminated line followed by a CRLF line.
         if i + 2 < buf.len() && buf[i + 1] == b'\r' && buf[i + 2] == b'\n' {
-            let end = if i > 0 && buf[i - 1] == b'\r' { i - 1 } else { i };
+            let end = if i > 0 && buf[i - 1] == b'\r' {
+                i - 1
+            } else {
+                i
+            };
             return Some((end, i + 3));
         }
     }

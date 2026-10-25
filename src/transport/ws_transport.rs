@@ -66,10 +66,9 @@ fn map_ws(e: WsError) -> TransportError {
 /// (retry-safe), with the HTTP rejection status kept when present.
 fn map_connect(e: WsError) -> TransportError {
     match e {
-        WsError::Http(res) => TransportError::Connect(format!(
-            "websocket upgrade rejected: {}",
-            res.status()
-        )),
+        WsError::Http(res) => {
+            TransportError::Connect(format!("websocket upgrade rejected: {}", res.status()))
+        }
         other => TransportError::Connect(other.to_string()),
     }
 }

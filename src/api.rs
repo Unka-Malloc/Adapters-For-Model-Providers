@@ -179,7 +179,10 @@ pub enum Role {
 #[non_exhaustive]
 pub enum MediaSource {
     Url(String),
-    Inline { media_type: String, data: bytes::Bytes },
+    Inline {
+        media_type: String,
+        data: bytes::Bytes,
+    },
     /// Opaque handle the host resolves through its effect port.
     Resource(String),
 }
@@ -506,18 +509,29 @@ pub enum StreamEvent {
     TextDelta { index: u32, text: String },
     /// A tool call begins; carries the full call identity up front.
     /// Partial arguments follow as `ToolCallDelta`.
-    ToolCallStarted { index: u32, id: String, name: String },
+    ToolCallStarted {
+        index: u32,
+        id: String,
+        name: String,
+    },
     /// Partial tool-call arguments appended to an open part.
     ToolCallDelta { index: u32, arguments: String },
     /// Reasoning/thinking text appended to an open reasoning part.
     ReasoningDelta { index: u32, text: String },
     /// Media bytes appended to an open part.
-    MediaDelta { index: u32, data: bytes::Bytes, media_type: Option<String> },
+    MediaDelta {
+        index: u32,
+        data: bytes::Bytes,
+        media_type: Option<String>,
+    },
     /// An open part is complete.
     PartFinished { index: u32 },
     /// A complete, provider-native object with no canonical form
     /// (opaque reasoning signature, server tool block, …).
-    Native { part_index: Option<u32>, value: serde_json::Value },
+    Native {
+        part_index: Option<u32>,
+        value: serde_json::Value,
+    },
     /// Cumulative or incremental usage reported mid- or post-stream.
     Usage(Usage),
     /// Terminal event with the final stop reason.
@@ -581,7 +595,10 @@ pub enum JobState {
     Submitted,
     Running,
     Succeeded(JobResult),
-    Failed { code: Option<String>, message: String },
+    Failed {
+        code: Option<String>,
+        message: String,
+    },
     Cancelled,
 }
 
@@ -603,7 +620,10 @@ pub struct RealtimeConfig {
 #[non_exhaustive]
 pub enum RealtimeInput {
     Text(String),
-    Audio { data: bytes::Bytes, media_type: String },
+    Audio {
+        data: bytes::Bytes,
+        media_type: String,
+    },
     ToolResult(ToolResult),
     /// Provider-native client event verbatim.
     Native(serde_json::Value),
@@ -616,13 +636,21 @@ pub enum RealtimeInput {
 #[non_exhaustive]
 pub enum RealtimeEvent {
     Text(String),
-    Audio { data: bytes::Bytes, media_type: String },
-    Transcript { text: String, final_: bool },
+    Audio {
+        data: bytes::Bytes,
+        media_type: String,
+    },
+    Transcript {
+        text: String,
+        final_: bool,
+    },
     ToolCall(ToolCall),
     Usage(Usage),
     /// Provider-native server event verbatim.
     Native(serde_json::Value),
-    Closed { reason: Option<String> },
+    Closed {
+        reason: Option<String>,
+    },
 }
 
 /// An open bidirectional session. Input and output are independent;
@@ -800,11 +828,19 @@ pub trait Adapter: Send + Sync {
         Err(self.unsupported("chat_stream"))
     }
 
-    async fn embed(&self, _req: EmbedRequest, _ctrl: &RequestControl) -> Result<EmbedOutput, Error> {
+    async fn embed(
+        &self,
+        _req: EmbedRequest,
+        _ctrl: &RequestControl,
+    ) -> Result<EmbedOutput, Error> {
         Err(self.unsupported("embed"))
     }
 
-    async fn rerank(&self, _req: RerankRequest, _ctrl: &RequestControl) -> Result<RerankOutput, Error> {
+    async fn rerank(
+        &self,
+        _req: RerankRequest,
+        _ctrl: &RequestControl,
+    ) -> Result<RerankOutput, Error> {
         Err(self.unsupported("rerank"))
     }
 
@@ -824,26 +860,46 @@ pub trait Adapter: Send + Sync {
         Err(self.unsupported("moderate"))
     }
 
-    async fn image(&self, _req: ImageRequest, _ctrl: &RequestControl) -> Result<MediaOutput, Error> {
+    async fn image(
+        &self,
+        _req: ImageRequest,
+        _ctrl: &RequestControl,
+    ) -> Result<MediaOutput, Error> {
         Err(self.unsupported("image"))
     }
 
-    async fn audio(&self, _req: AudioRequest, _ctrl: &RequestControl) -> Result<MediaOutput, Error> {
+    async fn audio(
+        &self,
+        _req: AudioRequest,
+        _ctrl: &RequestControl,
+    ) -> Result<MediaOutput, Error> {
         Err(self.unsupported("audio"))
     }
 
-    async fn video(&self, _req: VideoRequest, _ctrl: &RequestControl) -> Result<MediaOutput, Error> {
+    async fn video(
+        &self,
+        _req: VideoRequest,
+        _ctrl: &RequestControl,
+    ) -> Result<MediaOutput, Error> {
         Err(self.unsupported("video"))
     }
 
     /// Submit an asynchronous job; returns a resumable, credential-free handle.
-    async fn submit_job(&self, _op: JobOperation, _ctrl: &RequestControl) -> Result<JobHandle, Error> {
+    async fn submit_job(
+        &self,
+        _op: JobOperation,
+        _ctrl: &RequestControl,
+    ) -> Result<JobHandle, Error> {
         Err(self.unsupported("submit_job"))
     }
 
     /// Poll an accepted job. A transport failure retries the same job;
     /// it must never resubmit work.
-    async fn job_state(&self, _handle: &JobHandle, _ctrl: &RequestControl) -> Result<JobState, Error> {
+    async fn job_state(
+        &self,
+        _handle: &JobHandle,
+        _ctrl: &RequestControl,
+    ) -> Result<JobState, Error> {
         Err(self.unsupported("job_state"))
     }
 

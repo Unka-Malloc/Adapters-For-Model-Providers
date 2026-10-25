@@ -71,14 +71,16 @@ impl EffectHost for StubEffects {
 
 #[tokio::test]
 async fn device_flow_polls_through_pending_to_token() {
+    let access = common::fixture_token("live");
+    let refresh = common::fixture_token("refresh");
     let transport = MockTransport::new();
     transport
         .push(Response::Json(
             200,
             serde_json::json!({
-                "device_code": "dev-1", "user_code": "ABCD-EFGH",
+                "device_code": common::run_token("device-code"), "user_code": common::run_token("user-code"),
                 "verification_uri": "https://auth.example/activate",
-                "verification_uri_complete": "https://auth.example/activate?code=ABCD-EFGH",
+                "verification_uri_complete": format!("https://auth.example/activate?code={}", common::run_token("user-code")).as_str(),
                 "expires_in": 900, "interval": 0
             }),
         ))
@@ -89,8 +91,8 @@ async fn device_flow_polls_through_pending_to_token() {
         .push(Response::Json(
             200,
             serde_json::json!({
-                "access_token": "tok-live", "token_type": "Bearer",
-                "expires_in": 3600, "refresh_token": "ref-1"
+                "access_token": access, "token_type": "Bearer",
+                "expires_in": 3600, "refresh_token": refresh
             }),
         ));
     let effects = StubEffects::default();
@@ -98,14 +100,18 @@ async fn device_flow_polls_through_pending_to_token() {
     let token = oauth::device_flow(&client(), &transport, &effects, &ctrl())
         .await
         .unwrap();
-    assert_eq!(token.access_token.expose(), "tok-live");
-    assert_eq!(token.refresh_token.as_ref().unwrap().expose(), "ref-1");
+    assert_eq!(token.access_token.expose(), access);
+    assert_eq!(token.refresh_token.as_ref().unwrap().expose(), refresh);
     assert!(token.expires_at.is_some());
 
     // Presented the complete URI; polled once through a pending response.
     assert_eq!(
         effects.presented.lock().unwrap()[0].as_str(),
-        "https://auth.example/activate?code=ABCD-EFGH"
+        format!(
+            "https://auth.example/activate?code={}",
+            common::run_token("user-code")
+        )
+        .as_str()
     );
     assert_eq!(*effects.sleeps.lock().unwrap(), 1);
 
@@ -113,28 +119,36 @@ async fn device_flow_polls_through_pending_to_token() {
     assert_eq!(recorded.len(), 3);
     assert_eq!(recorded[0].url.path(), "/device");
     let poll_body = String::from_utf8(recorded[1].body.clone()).unwrap();
-    assert!(poll_body.contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"));
-    assert!(poll_body.contains("device_code=dev-1"));
+    assert!(
+        poll_body.contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code")
+    );
+    assert!(poll_body.contains(&format!("device_code={}", common::run_token("device-code"))));
     assert!(poll_body.contains("client_id=a4mp-test"));
 }
 
 #[tokio::test]
 async fn code_flow_exchanges_with_pkce_verifier() {
+    let access = common::fixture_token("code");
     let transport = MockTransport::new();
     transport.push(Response::Json(
         200,
-        serde_json::json!({"access_token": "tok-code", "token_type": "Bearer"}),
+        serde_json::json!({"access_token": access, "token_type": "Bearer"}),
     ));
     let effects = StubEffects::default();
 
     let token = oauth::code_flow(&client(), &transport, &effects, &ctrl())
         .await
         .unwrap();
-    assert_eq!(token.access_token.expose(), "tok-code");
+    assert_eq!(token.access_token.expose(), access);
 
     let presented = &effects.presented.lock().unwrap()[0];
     let params: Vec<_> = presented.query_pairs().collect();
-    let get = |k: &str| params.iter().find(|(n, _)| n == k).map(|(_, v)| v.to_string());
+    let get = |k: &str| {
+        params
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.to_string())
+    };
     assert_eq!(get("code_challenge_method").as_deref(), Some("S256"));
     assert!(get("code_challenge").is_some());
     assert!(get("state").is_some());
@@ -153,7 +167,7 @@ async fn device_access_denied_is_credential_error() {
         .push(Response::Json(
             200,
             serde_json::json!({
-                "device_code": "d", "user_code": "u",
+                "device_code": common::run_token("device-code"), "user_code": common::run_token("user-code"),
                 "verification_uri": "https://a.example/v", "expires_in": 60, "interval": 0
             }),
         ))
@@ -174,11 +188,11 @@ async fn refresh_keeps_prior_refresh_token_when_omitted() {
     let transport = MockTransport::new();
     transport.push(Response::Json(
         200,
-        serde_json::json!({"access_token": "tok-new", "token_type": "Bearer", "expires_in": 60}),
+        serde_json::json!({"access_token": common::run_token("refreshed-access"), "token_type": "Bearer", "expires_in": 60}),
     ));
     let old = oauth::OAuthToken {
-        access_token: Secret::new("tok-old"),
-        refresh_token: Some(Secret::new("ref-keep")),
+        access_token: Secret::new(common::run_token("stale-access")),
+        refresh_token: Some(Secret::new(common::run_token("kept-refresh"))),
         token_type: "Bearer".into(),
         expires_at: None,
         scope: None,
@@ -187,9 +201,18 @@ async fn refresh_keeps_prior_refresh_token_when_omitted() {
     let new = oauth::refresh(&client(), &old, &transport, &ctrl())
         .await
         .unwrap();
-    assert_eq!(new.access_token.expose(), "tok-new");
-    assert_eq!(new.refresh_token.as_ref().unwrap().expose(), "ref-keep");
+    assert_eq!(
+        new.access_token.expose(),
+        common::run_token("refreshed-access")
+    );
+    assert_eq!(
+        new.refresh_token.as_ref().unwrap().expose(),
+        common::run_token("kept-refresh")
+    );
     let body = String::from_utf8(transport.recorded()[0].body.clone()).unwrap();
     assert!(body.contains("grant_type=refresh_token"));
-    assert!(body.contains("refresh_token=ref-keep"));
+    assert!(body.contains(&format!(
+        "refresh_token={}",
+        common::run_token("kept-refresh")
+    )));
 }

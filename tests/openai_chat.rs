@@ -21,7 +21,7 @@ fn adapter(transport: MockTransport) -> OpenAiAdapter {
         AuthKind::Bearer,
         Arc::new(transport),
         Arc::new(StaticCredential(Credential::Bearer {
-            token: Secret::new("sk-test"),
+            token: Secret::new(common::run_token("bearer")),
             expires_at: None,
         })),
     )
@@ -49,7 +49,9 @@ async fn chat_request_maps_messages_tools_sampling_and_extensions() {
     req.messages.push(Message {
         role: Role::Assistant,
         content: vec![
-            ContentPart::Text { text: "calling".into() },
+            ContentPart::Text {
+                text: "calling".into(),
+            },
             ContentPart::ToolCall(ToolCall {
                 id: "call_1".into(),
                 name: "lookup".into(),
@@ -75,8 +77,7 @@ async fn chat_request_maps_messages_tools_sampling_and_extensions() {
     req.parallel_tool_calls = Some(false);
     req.sampling.temperature = Some(0.5);
     req.sampling.max_output_tokens = Some(64);
-    req.extensions
-        .insert("service_tier".into(), json!("flex"));
+    req.extensions.insert("service_tier".into(), json!("flex"));
 
     let out = a.chat(req, &RequestControl::default()).await.unwrap();
 
@@ -84,17 +85,23 @@ async fn chat_request_maps_messages_tools_sampling_and_extensions() {
     assert_eq!(req.url.path(), "/v1/chat/completions");
     assert_eq!(
         req.headers.get("authorization").unwrap(),
-        "Bearer sk-test"
+        format!("Bearer {}", common::run_token("bearer")).as_str()
     );
     let b = body_json(req);
     assert_eq!(b["model"], "vendor-model");
-    assert_eq!(b["messages"][0], json!({"role":"system","content":"be brief"}));
+    assert_eq!(
+        b["messages"][0],
+        json!({"role":"system","content":"be brief"})
+    );
     assert_eq!(b["messages"][1], json!({"role":"user","content":"hello"}));
     assert_eq!(
         b["messages"][2]["tool_calls"][0]["function"]["name"],
         "lookup"
     );
-    assert_eq!(b["messages"][3], json!({"role":"tool","tool_call_id":"call_1","content":"42"}));
+    assert_eq!(
+        b["messages"][3],
+        json!({"role":"tool","tool_call_id":"call_1","content":"42"})
+    );
     assert_eq!(b["tool_choice"]["function"]["name"], "lookup");
     assert_eq!(b["parallel_tool_calls"], false);
     assert_eq!(b["temperature"], 0.5);
@@ -138,7 +145,9 @@ async fn chat_response_preserves_reasoning_and_tool_calls() {
     let mut kinds = Vec::new();
     for p in &out.parts {
         kinds.push(match p {
-            ContentPart::Reasoning(b) => format!("reasoning:{}", b.summary.as_deref().unwrap_or("")),
+            ContentPart::Reasoning(b) => {
+                format!("reasoning:{}", b.summary.as_deref().unwrap_or(""))
+            }
             ContentPart::ToolCall(tc) => format!("tool:{}:{}", tc.name, tc.id),
             ContentPart::Text { .. } => "text".into(),
             _ => "other".into(),
@@ -190,9 +199,7 @@ async fn chat_stream_decodes_reasoning_text_toolcalls_and_usage() {
             }
             StreamEvent::ToolCallDelta { arguments, .. } => args.push_str(arguments),
             StreamEvent::Usage(u) => usage = u.output_tokens == Some(9),
-            StreamEvent::Finished { stop } => {
-                finish = matches!(stop, Some(StopReason::ToolUse))
-            }
+            StreamEvent::Finished { stop } => finish = matches!(stop, Some(StopReason::ToolUse)),
             _ => {}
         }
     }
@@ -220,7 +227,12 @@ async fn chat_stream_surfaces_provider_error_body() {
         Ok(_) => panic!("expected error"),
     };
     match err {
-        Error::Provider { status, code, retry, .. } => {
+        Error::Provider {
+            status,
+            code,
+            retry,
+            ..
+        } => {
             assert_eq!(status, Some(429));
             assert_eq!(code.as_deref(), Some("rate_limit_error"));
             assert_eq!(retry, RetrySafety::Safe);

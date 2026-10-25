@@ -64,7 +64,10 @@ pub enum Credential {
     /// Static API key material.
     ApiKey(Secret),
     /// Bearer/OAuth access token with optional expiry for refresh.
-    Bearer { token: Secret, expires_at: Option<SystemTime> },
+    Bearer {
+        token: Secret,
+        expires_at: Option<SystemTime>,
+    },
     /// Cloud-identity material; shape is mechanism-specific and opaque
     /// to callers (signing key, session token, workload-identity token…).
     Cloud {

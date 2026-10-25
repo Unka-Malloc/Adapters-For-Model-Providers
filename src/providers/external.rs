@@ -280,7 +280,9 @@ impl JsonLinesProtocol {
         // Error events, in either envelope.
         if kind_str.contains("error")
             || kind_str == "failed"
-            || ev.get("error").is_some_and(|e| e.is_object() || e.is_string())
+            || ev
+                .get("error")
+                .is_some_and(|e| e.is_object() || e.is_string())
         {
             return Err(event_error(ev.get("error").unwrap_or(ev)));
         }
@@ -306,8 +308,8 @@ impl JsonLinesProtocol {
                 &["id", "toolCallId", "tool_call_id", "callId", "call_id"],
             )
             .unwrap_or_default();
-            let name = first_str(ev, &["name", "toolName", "tool_name", "title"])
-                .unwrap_or_default();
+            let name =
+                first_str(ev, &["name", "toolName", "tool_name", "title"]).unwrap_or_default();
             out.push(StreamEvent::ToolCallStarted {
                 index,
                 id: id.to_owned(),
@@ -516,8 +518,7 @@ fn encode_messages(messages: &[Message]) -> Result<Value, Error> {
             .iter()
             .any(|p| !matches!(p, ContentPart::Text { .. }));
         let content = if structured {
-            let blocks: Result<Vec<Value>, Error> =
-                m.content.iter().map(encode_part).collect();
+            let blocks: Result<Vec<Value>, Error> = m.content.iter().map(encode_part).collect();
             Value::Array(blocks?)
         } else {
             let mut text = String::new();
@@ -584,8 +585,7 @@ fn encode_part(part: &ContentPart) -> Result<Value, Error> {
             "arguments": tc.arguments,
         })),
         ContentPart::ToolResult(tr) => {
-            let content: Result<Vec<Value>, Error> =
-                tr.content.iter().map(encode_part).collect();
+            let content: Result<Vec<Value>, Error> = tr.content.iter().map(encode_part).collect();
             Ok(json!({
                 "type": "toolResult",
                 "callId": tr.call_id,
@@ -644,8 +644,10 @@ fn first_str<'a>(v: &'a Value, keys: &[&str]) -> Option<&'a str> {
 }
 
 fn first_u64(v: &Value, keys: &[&str]) -> Option<u64> {
-    keys.iter()
-        .find_map(|k| v.get(*k).and_then(|x| x.as_u64().or_else(|| x.as_i64().map(|i| i as u64))))
+    keys.iter().find_map(|k| {
+        v.get(*k)
+            .and_then(|x| x.as_u64().or_else(|| x.as_i64().map(|i| i as u64)))
+    })
 }
 
 fn is_terminal(kind: &str) -> bool {
@@ -657,7 +659,9 @@ fn is_terminal(kind: &str) -> bool {
 
 fn stop_reason(s: &str) -> StopReason {
     match s {
-        "stop" | "end_turn" | "complete" | "completed" | "finished" | "done" => StopReason::Complete,
+        "stop" | "end_turn" | "complete" | "completed" | "finished" | "done" => {
+            StopReason::Complete
+        }
         "length" | "max_tokens" | "max_output_tokens" | "truncated" => StopReason::Length,
         "tool_use" | "tool_calls" | "function_call" => StopReason::ToolUse,
         "filtered" | "content_filter" | "refusal" => StopReason::Filtered,
@@ -880,13 +884,16 @@ impl ExternalAdapter {
         match self.resolver.resolve(scope).await? {
             Credential::None => Ok(()),
             Credential::ApiKey(_) => Err(Error::Credential(
-                "external client processes carry their own auth; API-key material cannot attach".into(),
+                "external client processes carry their own auth; API-key material cannot attach"
+                    .into(),
             )),
             Credential::Bearer { .. } => Err(Error::Credential(
-                "external client processes carry their own auth; bearer material cannot attach".into(),
+                "external client processes carry their own auth; bearer material cannot attach"
+                    .into(),
             )),
             Credential::Cloud { .. } => Err(Error::Credential(
-                "external client processes carry their own auth; cloud identity cannot attach".into(),
+                "external client processes carry their own auth; cloud identity cannot attach"
+                    .into(),
             )),
             other => Err(Error::Credential(format!(
                 "credential kind {other:?} cannot attach to an external client process"
@@ -896,10 +903,17 @@ impl ExternalAdapter {
 
     /// Resolve `MediaSource::Resource` parts into inline data through
     /// the host effect port before the request enters `encode`.
-    async fn resolve_media(&self, req: &mut ChatRequest, ctrl: &RequestControl) -> Result<(), Error> {
+    async fn resolve_media(
+        &self,
+        req: &mut ChatRequest,
+        ctrl: &RequestControl,
+    ) -> Result<(), Error> {
         for m in &mut req.messages {
             for part in &mut m.content {
-                if let ContentPart::Media { kind: _, source, .. } = part {
+                if let ContentPart::Media {
+                    kind: _, source, ..
+                } = part
+                {
                     if let MediaSource::Resource(id) = source {
                         let mut rr = ResourceRef {
                             id: id.clone(),
@@ -933,8 +947,7 @@ impl ExternalAdapter {
         let spec = self.protocol.spec(&req.model);
         let frames = self.protocol.encode(req)?;
         let process = self.effects.spawn(&spec, ctrl).await?;
-        let mut session =
-            ProcessSession::new(process, self.protocol.clone(), ctrl.cancel.clone());
+        let mut session = ProcessSession::new(process, self.protocol.clone(), ctrl.cancel.clone());
         for frame in frames {
             if let Err(e) = session.process.send_input(frame) {
                 session.abort();
@@ -956,8 +969,7 @@ impl Adapter for ExternalAdapter {
         self.resolve_media(&mut req, ctrl).await?;
         let mut session = self.open_session(&req, ctrl).await?;
         let mut events = Vec::new();
-        while let Some(item) =
-            std::future::poll_fn(|cx| Pin::new(&mut session).poll_next(cx)).await
+        while let Some(item) = std::future::poll_fn(|cx| Pin::new(&mut session).poll_next(cx)).await
         {
             events.push(item?);
         }
@@ -1220,11 +1232,7 @@ impl ProcessSession {
                 } else {
                     PartKey::ToolId(id.clone())
                 };
-                if let Some(&canon) = self
-                    .slots
-                    .get(&key)
-                    .filter(|c| self.open.contains_key(*c))
-                {
+                if let Some(&canon) = self.slots.get(&key).filter(|c| self.open.contains_key(*c)) {
                     // Update event for a call still open: no second
                     // start; re-point the wire index so this line's
                     // deltas reach the existing part.
@@ -1238,32 +1246,24 @@ impl ProcessSession {
                     name,
                 });
             }
-            StreamEvent::PartFinished { index } => {
-                match self.by_wire.remove(&index) {
-                    Some(canon) => {
-                        self.open.remove(&canon);
-                        self.slots.retain(|_, c| *c != canon);
-                        self.pending
-                            .push_back(StreamEvent::PartFinished { index: canon });
-                    }
-                    None => self
-                        .pending
-                        .push_back(StreamEvent::PartFinished { index }),
+            StreamEvent::PartFinished { index } => match self.by_wire.remove(&index) {
+                Some(canon) => {
+                    self.open.remove(&canon);
+                    self.slots.retain(|_, c| *c != canon);
+                    self.pending
+                        .push_back(StreamEvent::PartFinished { index: canon });
                 }
-            }
+                None => self.pending.push_back(StreamEvent::PartFinished { index }),
+            },
             StreamEvent::TextDelta { index, text } => {
                 let canon = self.delta_index(index, PartKind::Text);
-                self.pending.push_back(StreamEvent::TextDelta {
-                    index: canon,
-                    text,
-                });
+                self.pending
+                    .push_back(StreamEvent::TextDelta { index: canon, text });
             }
             StreamEvent::ReasoningDelta { index, text } => {
                 let canon = self.delta_index(index, PartKind::Reasoning);
-                self.pending.push_back(StreamEvent::ReasoningDelta {
-                    index: canon,
-                    text,
-                });
+                self.pending
+                    .push_back(StreamEvent::ReasoningDelta { index: canon, text });
             }
             StreamEvent::MediaDelta {
                 index,
@@ -1306,10 +1306,8 @@ impl ProcessSession {
             Some(&c) if self.open.contains_key(&c) => c,
             _ => {
                 let canon = self.alloc(key, wire, kind);
-                self.pending.push_back(StreamEvent::PartStarted {
-                    index: canon,
-                    kind,
-                });
+                self.pending
+                    .push_back(StreamEvent::PartStarted { index: canon, kind });
                 canon
             }
         }

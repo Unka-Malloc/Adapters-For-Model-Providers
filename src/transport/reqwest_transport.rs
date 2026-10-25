@@ -6,9 +6,7 @@
 use futures_util::{StreamExt, future::Either};
 
 use crate::api::RequestControl;
-use crate::transport::{
-    HttpRequest, HttpResponse, StreamingResponse, Transport, TransportError,
-};
+use crate::transport::{HttpRequest, HttpResponse, StreamingResponse, Transport, TransportError};
 
 /// `reqwest`-backed `Transport`. Clones share the connection pool.
 #[derive(Clone)]

@@ -114,9 +114,7 @@ pub trait EffectHost: Send + Sync {
     /// a QR code or display text — the host chooses.
     async fn present_url(&self, url: &url::Url, ctrl: &RequestControl) -> Result<(), Error> {
         let _ = ctrl;
-        Err(Error::Unsupported(format!(
-            "host cannot present {url}"
-        )))
+        Err(Error::Unsupported(format!("host cannot present {url}")))
     }
 
     /// Await the provider's redirect and return the full callback URL.
@@ -124,7 +122,9 @@ pub trait EffectHost: Send + Sync {
     /// scheme or accept a paste-back.
     async fn await_callback(&self, ctrl: &RequestControl) -> Result<String, Error> {
         let _ = ctrl;
-        Err(Error::Unsupported("host cannot capture auth callbacks".into()))
+        Err(Error::Unsupported(
+            "host cannot capture auth callbacks".into(),
+        ))
     }
 
     /// Wait `duration` before continuing a flow (device-code polling,

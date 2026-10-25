@@ -21,7 +21,9 @@ fn adapter(transport: MockTransport) -> AnthropicAdapter {
         target,
         AuthKind::ApiKey,
         Arc::new(transport),
-        Arc::new(StaticCredential(Credential::ApiKey(Secret::new("sk-ant-test")))),
+        Arc::new(StaticCredential(Credential::ApiKey(Secret::new(
+            common::run_token("anthropic-key"),
+        )))),
     )
     .unwrap()
 }
@@ -53,7 +55,9 @@ async fn chat_request_maps_system_media_thinking_tools_and_extensions() {
     req.messages.push(Message {
         role: Role::User,
         content: vec![
-            ContentPart::Text { text: "hello".into() },
+            ContentPart::Text {
+                text: "hello".into(),
+            },
             ContentPart::Media {
                 kind: MediaKind::Image,
                 source: MediaSource::Url("https://img.test/a.png".into()),
@@ -81,7 +85,9 @@ async fn chat_request_maps_system_media_thinking_tools_and_extensions() {
                 }),
                 summary: Some("prior reasoning".into()),
             }),
-            ContentPart::Text { text: "checking".into() },
+            ContentPart::Text {
+                text: "checking".into(),
+            },
             ContentPart::ToolCall(ToolCall {
                 id: "toolu_1".into(),
                 name: "lookup".into(),
@@ -97,7 +103,9 @@ async fn chat_request_maps_system_media_thinking_tools_and_extensions() {
                 content: vec![ContentPart::Text { text: "42".into() }],
                 is_error: true,
             }),
-            ContentPart::Text { text: "thanks".into() },
+            ContentPart::Text {
+                text: "thanks".into(),
+            },
         ],
     });
     req.tools.push(ToolDef {
@@ -113,18 +121,20 @@ async fn chat_request_maps_system_media_thinking_tools_and_extensions() {
     req.sampling.stop = vec!["END".into()];
     req.extensions
         .insert("metadata".into(), json!({"user_id": "u-9"}));
-    req.extensions
-        .insert("thinking".into(), json!({"type": "enabled", "budget_tokens": 1024}));
+    req.extensions.insert(
+        "thinking".into(),
+        json!({"type": "enabled", "budget_tokens": 1024}),
+    );
 
     let out = a.chat(req, &RequestControl::default()).await.unwrap();
 
     let req = &t.recorded()[0];
     assert_eq!(req.url.path(), "/v1/messages");
-    assert_eq!(req.headers.get("x-api-key").unwrap(), "sk-ant-test");
     assert_eq!(
-        req.headers.get("anthropic-version").unwrap(),
-        "2023-06-01"
+        req.headers.get("x-api-key").unwrap(),
+        common::run_token("anthropic-key")
     );
+    assert_eq!(req.headers.get("anthropic-version").unwrap(), "2023-06-01");
     assert!(req.headers.get("authorization").is_none());
 
     let b = body_json(req);
@@ -217,7 +227,10 @@ fn tool_choice_maps_to_wire_types() {
         (ToolChoice::Auto, json!({"type": "auto"})),
         (ToolChoice::None, json!({"type": "none"})),
         (ToolChoice::Required, json!({"type": "any"})),
-        (ToolChoice::Named("f".into()), json!({"type": "tool", "name": "f"})),
+        (
+            ToolChoice::Named("f".into()),
+            json!({"type": "tool", "name": "f"}),
+        ),
     ] {
         let req = ChatRequest {
             tool_choice: Some(choice),
@@ -460,9 +473,7 @@ async fn chat_stream_decodes_blocks_deltas_signatures_and_usage() {
     let mut log = Vec::new();
     for e in &events {
         match e {
-            StreamEvent::PartStarted { index, kind } => {
-                log.push(format!("start:{kind:?}:{index}"))
-            }
+            StreamEvent::PartStarted { index, kind } => log.push(format!("start:{kind:?}:{index}")),
             StreamEvent::TextDelta { index, text } => log.push(format!("text:{index}:{text}")),
             StreamEvent::ToolCallStarted { index, id, name } => {
                 log.push(format!("tool:{index}:{id}:{name}"))
@@ -481,7 +492,10 @@ async fn chat_stream_decodes_blocks_deltas_signatures_and_usage() {
                 "usage:{:?}/{:?}/{}",
                 u.input_tokens,
                 u.output_tokens,
-                u.extensions.get("cache_read_input_tokens").cloned().unwrap_or(json!(0))
+                u.extensions
+                    .get("cache_read_input_tokens")
+                    .cloned()
+                    .unwrap_or(json!(0))
             )),
             StreamEvent::Finished { stop } => log.push(format!("stop:{stop:?}")),
             other => log.push(format!("other:{other:?}")),
@@ -565,7 +579,10 @@ async fn chat_maps_error_bodies_and_retry_safety() {
         .unwrap_err();
     match err {
         Error::Provider {
-            status, code, retry, ..
+            status,
+            code,
+            retry,
+            ..
         } => {
             assert_eq!(status, Some(429));
             assert_eq!(code.as_deref(), Some("rate_limit_error"));
@@ -602,7 +619,10 @@ async fn chat_maps_error_bodies_and_retry_safety() {
     };
     match err {
         Error::Provider {
-            status, code, retry, ..
+            status,
+            code,
+            retry,
+            ..
         } => {
             assert_eq!(status, Some(429));
             assert_eq!(code.as_deref(), Some("rate_limit_error"));
@@ -635,7 +655,8 @@ async fn anthropic_rejects_foreign_reasoning_replay() {
 fn build_request_rejects_unrepresentable_parts() {
     // A role outside user/assistant/system has no wire form.
     let mut req = ChatRequest::default();
-    req.messages.push(Message::text(Role::Other("tool".into()), "x"));
+    req.messages
+        .push(Message::text(Role::Other("tool".into()), "x"));
     assert!(matches!(
         am::build_request(&req),
         Err(Error::Unsupported(_))
@@ -698,7 +719,9 @@ fn adapter_rejects_non_anthropic_protocol() {
         target,
         AuthKind::ApiKey,
         Arc::new(MockTransport::new()),
-        Arc::new(StaticCredential(Credential::ApiKey(Secret::new("k")))),
+        Arc::new(StaticCredential(Credential::ApiKey(Secret::new(
+            common::run_token("api-key"),
+        )))),
     );
     assert!(matches!(result, Err(Error::Unsupported(_))));
 }
@@ -717,7 +740,7 @@ async fn bearer_credential_uses_authorization_header() {
         AuthKind::Bearer,
         Arc::new(t.clone()),
         Arc::new(StaticCredential(Credential::Bearer {
-            token: Secret::new("oauth-tok"),
+            token: Secret::new(common::run_token("oauth-token")),
             expires_at: None,
         })),
     )
@@ -730,13 +753,10 @@ async fn bearer_credential_uses_authorization_header() {
     let req = &t.recorded()[0];
     assert_eq!(
         req.headers.get("authorization").unwrap(),
-        "Bearer oauth-tok"
+        format!("Bearer {}", common::run_token("oauth-token")).as_str()
     );
     assert!(req.headers.get("x-api-key").is_none());
-    assert_eq!(
-        req.headers.get("anthropic-version").unwrap(),
-        "2023-06-01"
-    );
+    assert_eq!(req.headers.get("anthropic-version").unwrap(), "2023-06-01");
 }
 
 struct StubEffects;

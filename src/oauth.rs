@@ -127,9 +127,10 @@ pub fn authorize_url(
     state: &str,
     challenge: &str,
 ) -> Result<url::Url, Error> {
-    let mut url = client.authorize_url.clone().ok_or_else(|| {
-        Error::Unsupported("provider has no authorization-code endpoint".into())
-    })?;
+    let mut url = client
+        .authorize_url
+        .clone()
+        .ok_or_else(|| Error::Unsupported("provider has no authorization-code endpoint".into()))?;
     {
         let mut q = url.query_pairs_mut();
         q.append_pair("response_type", "code");
@@ -207,10 +208,7 @@ fn decode_token(body: &Value) -> Result<OAuthToken, Error> {
             .unwrap_or("Bearer")
             .to_owned(),
         expires_at,
-        scope: body
-            .get("scope")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        scope: body.get("scope").and_then(Value::as_str).map(str::to_owned),
         raw: body.clone(),
     })
 }
@@ -262,7 +260,8 @@ pub async fn device_authorize(
             .ok_or_else(|| Error::UpstreamProtocol(format!("device grant missing {k}")))
     };
     let parse_url = |s: &str| -> Result<url::Url, Error> {
-        url::Url::parse(s).map_err(|e| Error::UpstreamProtocol(format!("bad verification URI: {e}")))
+        url::Url::parse(s)
+            .map_err(|e| Error::UpstreamProtocol(format!("bad verification URI: {e}")))
     };
     Ok(DeviceGrant {
         device_code: get_str("device_code")?,
@@ -275,10 +274,15 @@ pub async fn device_authorize(
             .transpose()?,
         expires_at: SystemTime::now()
             + Duration::from_secs(
-                body.get("expires_in").and_then(Value::as_u64).unwrap_or(600),
+                body.get("expires_in")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(600),
             ),
         interval: Duration::from_secs(
-            body.get("interval").and_then(Value::as_u64).unwrap_or(5).max(1),
+            body.get("interval")
+                .and_then(Value::as_u64)
+                .unwrap_or(5)
+                .max(1),
         ),
         raw: body,
     })
@@ -350,9 +354,9 @@ async fn code_flow_with_rng<R: TryRngCore>(
     ctrl: &RequestControl,
     rng: &mut R,
 ) -> Result<OAuthToken, Error> {
-    let redirect = effects.redirect_uri().ok_or_else(|| {
-        Error::Unsupported("host cannot capture auth callbacks".into())
-    })?;
+    let redirect = effects
+        .redirect_uri()
+        .ok_or_else(|| Error::Unsupported("host cannot capture auth callbacks".into()))?;
     let (verifier, challenge) = pkce_with(&mut *rng)?;
     let state = random_url_safe(&mut *rng, 24)?;
     let url = authorize_url(client, &redirect, &state, &challenge)?;

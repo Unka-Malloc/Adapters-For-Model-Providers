@@ -48,7 +48,11 @@ fn decodes_system_blocks_tools_and_sampling() {
         "stop_sequences": ["END"]
     });
     let (req, report) = decode(&body);
-    assert!(report.losses.is_empty(), "losses: {:?}", loss_paths(&report));
+    assert!(
+        report.losses.is_empty(),
+        "losses: {:?}",
+        loss_paths(&report)
+    );
 
     assert_eq!(req.model, "claude-x");
     assert_eq!(req.sampling.max_output_tokens, Some(256));
@@ -79,7 +83,10 @@ fn decodes_system_blocks_tools_and_sampling() {
         other => panic!("expected image, got {other:?}"),
     }
     match &user[2] {
-        ContentPart::Media { source: MediaSource::Url(u), .. } => {
+        ContentPart::Media {
+            source: MediaSource::Url(u),
+            ..
+        } => {
             assert_eq!(u, "https://img.test/pic.png")
         }
         other => panic!("expected url image, got {other:?}"),
@@ -152,7 +159,10 @@ fn server_tools_and_unknown_fields_report_not_silent() {
         "request.metadata",
         "request.thinking",
     ] {
-        assert!(paths.iter().any(|p| p == expected), "missing loss {expected} in {paths:?}");
+        assert!(
+            paths.iter().any(|p| p == expected),
+            "missing loss {expected} in {paths:?}"
+        );
     }
     assert_eq!(report.source, Protocol::AnthropicMessages);
 }
@@ -176,7 +186,9 @@ fn encodes_output_as_message() {
                 opaque: json!({"type": "thinking", "thinking": "ponder", "signature": "sig1"}),
                 summary: Some("ponder".into()),
             }),
-            ContentPart::Text { text: "done".into() },
+            ContentPart::Text {
+                text: "done".into(),
+            },
             ContentPart::ToolCall(ToolCall {
                 id: "toolu_9".into(),
                 name: "f".into(),
@@ -192,14 +204,21 @@ fn encodes_output_as_message() {
         extensions: Map::new(),
     };
     let (v, report) = encode_chat_output(WireDialect::AnthropicMessages, &out, "m");
-    assert!(report.losses.is_empty(), "losses: {:?}", loss_paths(&report));
+    assert!(
+        report.losses.is_empty(),
+        "losses: {:?}",
+        loss_paths(&report)
+    );
 
     assert!(v["id"].as_str().unwrap().starts_with("msg_"));
     assert_eq!(v["type"], "message");
     assert_eq!(v["role"], "assistant");
     assert_eq!(v["model"], "m");
     // Same-dialect thinking replays verbatim, signature intact.
-    assert_eq!(v["content"][0], json!({"type": "thinking", "thinking": "ponder", "signature": "sig1"}));
+    assert_eq!(
+        v["content"][0],
+        json!({"type": "thinking", "thinking": "ponder", "signature": "sig1"})
+    );
     assert_eq!(v["content"][1], json!({"type": "text", "text": "done"}));
     assert_eq!(
         v["content"][2],
@@ -238,7 +257,10 @@ fn encode_reports_media_and_unsigned_reasoning() {
     assert!(paths.iter().any(|p| p.starts_with("parts[1]")), "{paths:?}");
     // Foreign reasoning renders as a signature-less thinking block —
     // reported, never forged.
-    assert_eq!(v["content"][0], json!({"type": "thinking", "thinking": "chain"}));
+    assert_eq!(
+        v["content"][0],
+        json!({"type": "thinking", "thinking": "chain"})
+    );
     assert!(v["content"][0].get("signature").is_none());
     assert_eq!(v["stop_reason"], "end_turn");
 }
@@ -273,26 +295,55 @@ fn stream_encodes_message_blocks_and_stop() {
     assert_eq!(envelope["type"], "message_start");
     assert_eq!(envelope["message"]["role"], "assistant");
     assert_eq!(envelope["message"]["model"], "m");
-    assert!(envelope["message"]["id"].as_str().unwrap().starts_with("msg_"));
+    assert!(
+        envelope["message"]["id"]
+            .as_str()
+            .unwrap()
+            .starts_with("msg_")
+    );
 
     let mut enc = stream_encoder(dialect, "m");
     let events = [
-        StreamEvent::PartStarted { index: 0, kind: PartKind::Reasoning },
-        StreamEvent::ReasoningDelta { index: 0, text: "th".into() },
+        StreamEvent::PartStarted {
+            index: 0,
+            kind: PartKind::Reasoning,
+        },
+        StreamEvent::ReasoningDelta {
+            index: 0,
+            text: "th".into(),
+        },
         // A signature rides through verbatim as a provider-native delta.
         StreamEvent::Native {
             part_index: Some(0),
             value: json!({"type": "signature_delta", "signature": "sig1"}),
         },
         StreamEvent::PartFinished { index: 0 },
-        StreamEvent::PartStarted { index: 1, kind: PartKind::Text },
-        StreamEvent::TextDelta { index: 1, text: "Hello".into() },
+        StreamEvent::PartStarted {
+            index: 1,
+            kind: PartKind::Text,
+        },
+        StreamEvent::TextDelta {
+            index: 1,
+            text: "Hello".into(),
+        },
         StreamEvent::PartFinished { index: 1 },
-        StreamEvent::ToolCallStarted { index: 2, id: "toolu_1".into(), name: "lookup".into() },
-        StreamEvent::ToolCallDelta { index: 2, arguments: "{\"q\":\"x\"}".into() },
+        StreamEvent::ToolCallStarted {
+            index: 2,
+            id: "toolu_1".into(),
+            name: "lookup".into(),
+        },
+        StreamEvent::ToolCallDelta {
+            index: 2,
+            arguments: "{\"q\":\"x\"}".into(),
+        },
         StreamEvent::PartFinished { index: 2 },
-        StreamEvent::Usage(Usage { output_tokens: Some(9), ..Default::default() }),
-        StreamEvent::Finished { stop: Some(StopReason::ToolUse) },
+        StreamEvent::Usage(Usage {
+            output_tokens: Some(9),
+            ..Default::default()
+        }),
+        StreamEvent::Finished {
+            stop: Some(StopReason::ToolUse),
+        },
     ];
     let mut frames = Vec::new();
     for e in &events {
@@ -326,12 +377,18 @@ fn stream_encodes_message_blocks_and_stop() {
     );
 
     assert_eq!(data(&frames[0])["content_block"]["type"], "thinking");
-    assert_eq!(data(&frames[1])["delta"], json!({"type": "thinking_delta", "thinking": "th"}));
+    assert_eq!(
+        data(&frames[1])["delta"],
+        json!({"type": "thinking_delta", "thinking": "th"})
+    );
     assert_eq!(data(&frames[2])["index"], 0);
     assert_eq!(data(&frames[2])["delta"]["type"], "signature_delta");
     assert_eq!(data(&frames[2])["delta"]["signature"], "sig1");
     assert_eq!(data(&frames[4])["index"], 1);
-    assert_eq!(data(&frames[4])["content_block"], json!({"type": "text", "text": ""}));
+    assert_eq!(
+        data(&frames[4])["content_block"],
+        json!({"type": "text", "text": ""})
+    );
     assert_eq!(data(&frames[5])["delta"]["text"], "Hello");
     let tool = data(&frames[7]);
     assert_eq!(tool["index"], 2);
@@ -351,7 +408,10 @@ fn stream_relays_native_blocks_and_events() {
     let dialect = WireDialect::AnthropicMessages;
     let mut enc = stream_encoder(dialect, "m");
     // An unknown part kind waits for its provider-native block object.
-    let mut frames = enc.encode(&StreamEvent::PartStarted { index: 0, kind: PartKind::Other });
+    let mut frames = enc.encode(&StreamEvent::PartStarted {
+        index: 0,
+        kind: PartKind::Other,
+    });
     assert!(frames.is_empty());
     frames.extend(enc.encode(&StreamEvent::Native {
         part_index: Some(0),
@@ -402,7 +462,11 @@ fn round_trip_request_is_identity_on_representable_inputs() {
         "stop_sequences": ["END"]
     });
     let (req, report) = decode(&body);
-    assert!(report.losses.is_empty(), "losses: {:?}", loss_paths(&report));
+    assert!(
+        report.losses.is_empty(),
+        "losses: {:?}",
+        loss_paths(&report)
+    );
 
     // Re-encode through the outbound protocol codec: the round trip is
     // identity on every representable field.
@@ -504,7 +568,10 @@ fn finished_stops_every_open_block_before_message_stop() {
         .collect();
     assert_eq!(starts, [0, 1]);
     assert_eq!(stops, [0, 1]);
-    assert_eq!(frames.last().unwrap().event.as_deref(), Some("message_stop"));
+    assert_eq!(
+        frames.last().unwrap().event.as_deref(),
+        Some("message_stop")
+    );
 }
 
 #[test]
@@ -570,7 +637,8 @@ async fn bridge_closes_chat_upstream_blocks_for_anthropic_client() {
         Arc::new(ChatStreamAdapter(target)),
         WireDialect::AnthropicMessages,
     );
-    let body = br#"{"model":"claude-x","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}"#;
+    let body =
+        br#"{"model":"claude-x","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}"#;
     let mut stream = bridge
         .chat_stream(body, &RequestControl::default())
         .await

@@ -13,7 +13,9 @@ fn client() -> (Client, MockTransport) {
     let client = Client::new(
         Catalog::default(),
         Arc::new(transport.clone()),
-        Arc::new(StaticCredential(Credential::ApiKey(Secret::new("sk-test")))),
+        Arc::new(StaticCredential(Credential::ApiKey(Secret::new(
+            common::run_token("api-key"),
+        )))),
     );
     (client, transport)
 }
@@ -23,7 +25,10 @@ fn resolve_by_id_alias_and_case() {
     let catalog = Catalog::default();
     assert_eq!(catalog.resolve("openai").unwrap().name, "OpenAI");
     assert_eq!(catalog.resolve("OPENAI").unwrap().id.as_str(), "openai");
-    assert_eq!(catalog.resolve("moonshot").unwrap().id.as_str(), "moonshotai");
+    assert_eq!(
+        catalog.resolve("moonshot").unwrap().id.as_str(),
+        "moonshotai"
+    );
     assert_eq!(catalog.resolve("kimi").unwrap().id.as_str(), "moonshotai");
     assert!(catalog.resolve("nonexistent-provider").is_none());
 }
@@ -71,10 +76,7 @@ async fn bind_provider_constructs_adapter_and_discovers_models() {
         .bind_provider("deepseek", None, None, AuthKind::ApiKey)
         .unwrap();
     assert_eq!(adapter.target().provider.as_str(), "deepseek");
-    assert_eq!(
-        adapter.target().protocol,
-        Protocol::OpenAiChatCompletions
-    );
+    assert_eq!(adapter.target().protocol, Protocol::OpenAiChatCompletions);
 
     let models = adapter.models(&RequestControl::default()).await.unwrap();
     assert_eq!(models.len(), 2);
@@ -86,8 +88,11 @@ async fn bind_provider_constructs_adapter_and_discovers_models() {
     assert_eq!(recorded[0].method, http::Method::GET);
     assert_eq!(recorded[0].url.path(), "/models");
     assert_eq!(
-        recorded[0].headers.get(http::header::AUTHORIZATION).unwrap(),
-        "Bearer sk-test"
+        recorded[0]
+            .headers
+            .get(http::header::AUTHORIZATION)
+            .unwrap(),
+        format!("Bearer {}", common::run_token("api-key")).as_str()
     );
 }
 
@@ -95,7 +100,12 @@ async fn bind_provider_constructs_adapter_and_discovers_models() {
 async fn protocol_preference_selects_target() {
     let (client, _) = client();
     let adapter = client
-        .bind_provider("openai", Some(Protocol::OpenAiResponses), None, AuthKind::ApiKey)
+        .bind_provider(
+            "openai",
+            Some(Protocol::OpenAiResponses),
+            None,
+            AuthKind::ApiKey,
+        )
         .unwrap();
     assert_eq!(adapter.target().protocol, Protocol::OpenAiResponses);
 }

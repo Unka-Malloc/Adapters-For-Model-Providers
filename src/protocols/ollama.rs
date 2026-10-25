@@ -107,7 +107,11 @@ fn encode_message(role: &str, parts: &[&ContentPart]) -> Result<Value, Error> {
     for part in parts {
         match part {
             ContentPart::Text { text: t } => text.push_str(t),
-            ContentPart::Media { kind, source, detail } => {
+            ContentPart::Media {
+                kind,
+                source,
+                detail,
+            } => {
                 if *kind != MediaKind::Image {
                     return Err(Error::Unsupported(
                         "only image media parts are representable on the Ollama chat API".into(),
@@ -257,10 +261,12 @@ pub fn decode_response(body: &[u8]) -> Result<Output, Error> {
     let usage = usage_from(&v);
     Ok(Output {
         parts,
-        stop: v["done_reason"]
-            .as_str()
-            .map(stop_reason)
-            .or_else(|| v["done"].as_bool().filter(|d| *d).map(|_| StopReason::Complete)),
+        stop: v["done_reason"].as_str().map(stop_reason).or_else(|| {
+            v["done"]
+                .as_bool()
+                .filter(|d| *d)
+                .map(|_| StopReason::Complete)
+        }),
         usage: (usage.input_tokens.is_some()
             || usage.output_tokens.is_some()
             || !usage.extensions.is_empty())
@@ -274,7 +280,9 @@ fn decode_tool_call(v: &Value) -> ToolCall {
     let function = &v["function"];
     let arguments = match &function["arguments"] {
         // Defensive: some servers emit the string form.
-        Value::String(s) => serde_json::from_str(s).unwrap_or_else(|_| function["arguments"].clone()),
+        Value::String(s) => {
+            serde_json::from_str(s).unwrap_or_else(|_| function["arguments"].clone())
+        }
         other => other.clone(),
     };
     ToolCall {
@@ -363,7 +371,11 @@ pub fn decode_embed(body: &[u8]) -> Result<EmbedOutput, Error> {
         let row = row
             .as_array()
             .ok_or_else(|| Error::UpstreamProtocol("embedding row is not an array".into()))?;
-        embeddings.push(row.iter().map(|n| n.as_f64().unwrap_or(0.0) as f32).collect());
+        embeddings.push(
+            row.iter()
+                .map(|n| n.as_f64().unwrap_or(0.0) as f32)
+                .collect(),
+        );
     }
     let usage = usage_from(&v);
     let claimed = [
@@ -569,7 +581,10 @@ pub struct NdjsonEventStream {
 }
 
 impl NdjsonEventStream {
-    pub fn new(inner: DynStream<'static, bytes::Bytes>, decoder: Box<dyn NdjsonEventDecoder>) -> Self {
+    pub fn new(
+        inner: DynStream<'static, bytes::Bytes>,
+        decoder: Box<dyn NdjsonEventDecoder>,
+    ) -> Self {
         Self {
             inner: NdjsonStream::new(inner),
             decoder,

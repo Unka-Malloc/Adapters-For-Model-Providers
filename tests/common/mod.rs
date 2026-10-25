@@ -60,7 +60,9 @@ impl MockTransport {
             .lock()
             .unwrap()
             .pop_front()
-            .unwrap_or(Response::Fail(TransportError::Io("no scripted response".into())))
+            .unwrap_or(Response::Fail(TransportError::Io(
+                "no scripted response".into(),
+            )))
     }
 }
 
@@ -97,11 +99,9 @@ impl Transport for MockTransport {
         match self.next() {
             Response::Sse(chunks) => {
                 let body: DynStream<'static, bytes::Bytes> =
-                    Box::pin(futures_util::stream::iter(
-                        chunks.into_iter().map(|c| {
-                            Ok::<_, Error>(bytes::Bytes::from_static(c.as_bytes()))
-                        }),
-                    ));
+                    Box::pin(futures_util::stream::iter(chunks.into_iter().map(|c| {
+                        Ok::<_, Error>(bytes::Bytes::from_static(c.as_bytes()))
+                    })));
                 Ok(StreamingResponse {
                     status: http::StatusCode::OK,
                     headers: http::HeaderMap::new(),
@@ -109,10 +109,9 @@ impl Transport for MockTransport {
                 })
             }
             Response::Json(status, v) => {
-                let body: DynStream<'static, bytes::Bytes> =
-                    Box::pin(futures_util::stream::iter([Ok::<_, Error>(
-                        serde_json::to_vec(&v).unwrap().into(),
-                    )]));
+                let body: DynStream<'static, bytes::Bytes> = Box::pin(futures_util::stream::iter(
+                    [Ok::<_, Error>(serde_json::to_vec(&v).unwrap().into())],
+                ));
                 Ok(StreamingResponse {
                     status: http::StatusCode::from_u16(status).unwrap(),
                     headers: http::HeaderMap::new(),
@@ -120,10 +119,9 @@ impl Transport for MockTransport {
                 })
             }
             Response::Text(status, t) => {
-                let body: DynStream<'static, bytes::Bytes> =
-                    Box::pin(futures_util::stream::iter([Ok::<_, Error>(
-                        bytes::Bytes::from_static(t.as_bytes()),
-                    )]));
+                let body: DynStream<'static, bytes::Bytes> = Box::pin(futures_util::stream::iter(
+                    [Ok::<_, Error>(bytes::Bytes::from_static(t.as_bytes()))],
+                ));
                 Ok(StreamingResponse {
                     status: http::StatusCode::from_u16(status).unwrap(),
                     headers: http::HeaderMap::new(),

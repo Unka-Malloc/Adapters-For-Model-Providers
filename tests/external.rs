@@ -206,7 +206,9 @@ fn stdin_json(h: &ProcHandle) -> Value {
 #[tokio::test]
 async fn chat_writes_one_jsonrpc_request_line() {
     let (proc, h) = ScriptProcess::new(
-        vec!["{\"id\":1,\"result\":{\"stopReason\":\"end_turn\",\"usage\":{\"inputTokens\":5,\"outputTokens\":2}}}\n"],
+        vec![
+            "{\"id\":1,\"result\":{\"stopReason\":\"end_turn\",\"usage\":{\"inputTokens\":5,\"outputTokens\":2}}}\n",
+        ],
         0,
     );
     let (a, fx) = jsonl_adapter(proc);
@@ -215,8 +217,7 @@ async fn chat_writes_one_jsonrpc_request_line() {
         model: "gpt-5".into(),
         ..Default::default()
     };
-    req.messages
-        .push(Message::text(Role::User, "say hi"));
+    req.messages.push(Message::text(Role::User, "say hi"));
     req.tools.push(ToolDef {
         name: "lookup".into(),
         description: "find things".into(),
@@ -400,9 +401,7 @@ async fn acp_notification_envelope_decodes_updates() {
 #[tokio::test]
 async fn non_json_diagnostics_are_tolerated_and_captured() {
     let (proc, _h) = ScriptProcess::new(
-        vec![
-            "progress: warming up\n{\"type\":\"delta\",\"text\":\"ok\"}\n",
-        ],
+        vec!["progress: warming up\n{\"type\":\"delta\",\"text\":\"ok\"}\n"],
         0,
     );
     let (a, _fx) = jsonl_adapter(proc);
@@ -436,7 +435,10 @@ async fn nonzero_exit_is_provider_error_with_output_tail() {
         .unwrap_err();
     match err {
         Error::Provider {
-            code, message, retry, ..
+            code,
+            message,
+            retry,
+            ..
         } => {
             assert_eq!(code.as_deref(), Some("exit:3"));
             assert!(message.contains("quota exhausted"), "{message}");
@@ -584,7 +586,9 @@ async fn non_none_credential_is_rejected_before_spawn() {
             client: "cursor-agent".into(),
         },
         Arc::new(MockTransport::new()),
-        Arc::new(StaticCredential(Credential::ApiKey(Secret::new("leak-me-not")))),
+        Arc::new(StaticCredential(Credential::ApiKey(Secret::new(
+            common::run_token("api-key"),
+        )))),
         effects.clone(),
         Arc::new(jsonl_protocol()),
     )
@@ -609,10 +613,7 @@ async fn cancel_during_stall_terminates_the_process() {
     let (a, _fx) = jsonl_adapter(proc.stalling());
     let ctrl = RequestControl::default();
     let cancel = ctrl.cancel.clone();
-    let stream = a
-        .chat_stream(ChatRequest::default(), &ctrl)
-        .await
-        .unwrap();
+    let stream = a.chat_stream(ChatRequest::default(), &ctrl).await.unwrap();
     cancel.cancel();
     match collect(stream).await {
         Err(Error::Cancelled) => {}
@@ -646,10 +647,7 @@ async fn dropping_the_stream_terminates_the_process() {
 
 #[tokio::test]
 async fn end_of_stream_waits_and_closes_parts() {
-    let (proc, h) = ScriptProcess::new(
-        vec!["{\"type\":\"delta\",\"text\":\"x\"}\n"],
-        0,
-    );
+    let (proc, h) = ScriptProcess::new(vec!["{\"type\":\"delta\",\"text\":\"x\"}\n"], 0);
     let (a, _fx) = jsonl_adapter(proc);
     let events = collect(
         a.chat_stream(ChatRequest::default(), &RequestControl::default())
@@ -658,10 +656,11 @@ async fn end_of_stream_waits_and_closes_parts() {
     )
     .await
     .unwrap();
-    assert!(events.iter().any(|e| matches!(
-        e,
-        StreamEvent::PartFinished { index: 0 }
-    )));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::PartFinished { index: 0 }))
+    );
     assert!(*h.waits.lock().unwrap() >= 1);
     assert!(*h.terminates.lock().unwrap() >= 1);
 }
@@ -805,5 +804,3 @@ async fn whole_framing_delivers_one_frame_at_eof() {
     assert!(h.stdin.lock().unwrap().is_empty());
     assert!(matches!(out.stop, Some(StopReason::Complete)));
 }
-
-

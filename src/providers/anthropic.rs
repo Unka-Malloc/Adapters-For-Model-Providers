@@ -98,7 +98,11 @@ impl AnthropicAdapter {
 
     /// Resolve `MediaSource::Resource` parts into inline data through the
     /// host effect port before the request enters the codec.
-    async fn resolve_media(&self, req: &mut ChatRequest, ctrl: &RequestControl) -> Result<(), Error> {
+    async fn resolve_media(
+        &self,
+        req: &mut ChatRequest,
+        ctrl: &RequestControl,
+    ) -> Result<(), Error> {
         let needs_resolve = req.messages.iter().any(|m| {
             m.content.iter().any(|p| {
                 matches!(
@@ -119,7 +123,10 @@ impl AnthropicAdapter {
             .ok_or_else(|| Error::Unsupported("media resources need a host effect port".into()))?;
         for m in &mut req.messages {
             for part in &mut m.content {
-                if let ContentPart::Media { kind: _, source, .. } = part {
+                if let ContentPart::Media {
+                    kind: _, source, ..
+                } = part
+                {
                     if let MediaSource::Resource(id) = source {
                         let mut rr = ResourceRef {
                             id: id.clone(),
@@ -142,7 +149,10 @@ impl AnthropicAdapter {
     async fn send_json(&self, req: HttpRequest, ctrl: &RequestControl) -> Result<Vec<u8>, Error> {
         let res = self.transport.send(req, ctrl).await?;
         if !res.status.is_success() {
-            return Err(anthropic_messages::http_error(res.status.as_u16(), &res.body));
+            return Err(anthropic_messages::http_error(
+                res.status.as_u16(),
+                &res.body,
+            ));
         }
         Ok(res.body.to_vec())
     }
@@ -157,8 +167,7 @@ impl AnthropicAdapter {
             // Drain the error body before building the error.
             let mut body = Vec::new();
             let mut stream = res.body;
-            while let Some(chunk) = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await
-            {
+            while let Some(chunk) = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await {
                 match chunk {
                     Ok(b) => body.extend_from_slice(&b),
                     Err(e) => return Err(e),

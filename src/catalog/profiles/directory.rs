@@ -175,11 +175,7 @@ pub fn profiles() -> Vec<ProviderProfile> {
             aliases: &["privatemode"],
             auth: KEY.to_vec(),
             targets: vec![
-                region(
-                    CHAT,
-                    "https://proxyless-api.privatemode.ai/v1",
-                    "proxyless",
-                ),
+                region(CHAT, "https://proxyless-api.privatemode.ai/v1", "proxyless"),
                 region(ANTH, "https://proxyless-api.privatemode.ai", "proxyless"),
                 region(CHAT, "http://localhost:8080/v1", "local-proxy"),
             ],
@@ -1018,7 +1014,10 @@ pub fn profiles() -> Vec<ProviderProfile> {
             name: "CloudFerro Sherlock",
             aliases: &["sherlock", "cloudferro"],
             auth: KEY.to_vec(),
-            targets: vec![target(CHAT, "https://api-sherlock.cloudferro.com/openai/v1")],
+            targets: vec![target(
+                CHAT,
+                "https://api-sherlock.cloudferro.com/openai/v1",
+            )],
             catalogue: Some("cloudferro-sherlock"),
         },
         ProviderProfile {

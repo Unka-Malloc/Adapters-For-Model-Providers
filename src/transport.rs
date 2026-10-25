@@ -173,9 +173,9 @@ impl TransportError {
     pub fn retry_safety(&self) -> RetrySafety {
         match self {
             TransportError::Connect(_) => RetrySafety::Safe,
-            TransportError::Cancelled
-            | TransportError::Disconnected(_)
-            | TransportError::Io(_) => RetrySafety::Unsafe,
+            TransportError::Cancelled | TransportError::Disconnected(_) | TransportError::Io(_) => {
+                RetrySafety::Unsafe
+            }
         }
     }
 }
@@ -200,8 +200,11 @@ pub trait DuplexChannel: Send {
 #[async_trait::async_trait]
 pub trait Transport: Send + Sync {
     /// Buffered request/response.
-    async fn send(&self, req: HttpRequest, ctrl: &RequestControl)
-    -> Result<HttpResponse, TransportError>;
+    async fn send(
+        &self,
+        req: HttpRequest,
+        ctrl: &RequestControl,
+    ) -> Result<HttpResponse, TransportError>;
 
     /// Streaming request/response for SSE and chunked bodies.
     async fn send_stream(

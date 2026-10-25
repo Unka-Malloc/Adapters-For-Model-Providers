@@ -201,8 +201,7 @@ fn encode_function_response(
             ContentPart::Text { text: t } => text.push_str(t),
             _ => {
                 return Err(Error::Unsupported(
-                    "non-text tool result parts are not representable in functionResponse"
-                        .into(),
+                    "non-text tool result parts are not representable in functionResponse".into(),
                 ));
             }
         }
@@ -369,7 +368,10 @@ fn decode_part(part: &Value, calls: &mut u32, parts: &mut Vec<ContentPart>) -> R
     if let Some(file) = part.get("fileData") {
         let media_type = file["mimeType"].as_str().map(str::to_owned);
         parts.push(ContentPart::Media {
-            kind: media_type.as_deref().map(media_kind).unwrap_or(MediaKind::File),
+            kind: media_type
+                .as_deref()
+                .map(media_kind)
+                .unwrap_or(MediaKind::File),
             source: MediaSource::Url(file["fileUri"].as_str().unwrap_or_default().to_owned()),
             detail: media_type,
         });
@@ -409,8 +411,8 @@ fn stop_reason(reason: &str, tool_use: bool) -> StopReason {
         "STOP" if tool_use => StopReason::ToolUse,
         "STOP" => StopReason::Complete,
         "MAX_TOKENS" => StopReason::Length,
-        "SAFETY" | "BLOCKLIST" | "PROHIBITED_CONTENT" | "RECITATION" | "IMAGE_SAFETY"
-        | "SPII" | "LANGUAGE" => StopReason::Filtered,
+        "SAFETY" | "BLOCKLIST" | "PROHIBITED_CONTENT" | "RECITATION" | "IMAGE_SAFETY" | "SPII"
+        | "LANGUAGE" => StopReason::Filtered,
         other => StopReason::Other(other.to_owned()),
     }
 }
