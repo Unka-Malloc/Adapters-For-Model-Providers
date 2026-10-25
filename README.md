@@ -75,11 +75,15 @@ channel. Swap in your own to control pooling, proxies, or runtimes.
 
 ```rust,no_run
 use std::sync::Arc;
-use a4mp::{api::*, auth::*, catalog::*, transport::ReqwestTransport};
+use a4mp::{api::*, auth::*, catalog::*, effects::EffectHost, transport::ReqwestTransport};
 
 # async fn example() -> Result<(), a4mp::api::Error> {
+# let resolver = Arc::new(NoCredentials);
+# struct HostEffects;
+# impl EffectHost for HostEffects {}
+# let effects = Arc::new(HostEffects);
 let client = Client::new(
-    Catalog::with_builtin_profiles(),
+    Catalog::with_builtin_adapters(),
     Arc::new(ReqwestTransport::new()),
     resolver,          // your CredentialResolver impl
 )
@@ -94,8 +98,11 @@ let adapter = client.bind_provider(
 )?;
 
 let output = adapter.chat(
-    ChatRequest::new("claude-sonnet-4-5")
-        .message(Message::user("Hello")),
+    ChatRequest {
+        model: "claude-sonnet-4-5".into(),
+        messages: vec![Message::text(Role::User, "Hello")],
+        ..Default::default()
+    },
     &RequestControl::default(),
 ).await?;
 # Ok(())

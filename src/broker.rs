@@ -33,12 +33,12 @@ pub fn jwt_claim(token: &Secret, key_path: &[&str]) -> Result<Value, Error> {
         .expose()
         .split('.')
         .nth(1)
-        .ok_or_else(|| Error::Protocol("token is not a JWT".into()))?;
+        .ok_or_else(|| Error::UpstreamProtocol("token is not a JWT".into()))?;
     let bytes = URL_SAFE_NO_PAD
         .decode(payload)
-        .map_err(|e| Error::Protocol(format!("JWT payload is not base64url: {e}")))?;
+        .map_err(|e| Error::UpstreamProtocol(format!("JWT payload is not base64url: {e}")))?;
     let body: Value = serde_json::from_slice(&bytes)
-        .map_err(|e| Error::Protocol(format!("JWT payload is not JSON: {e}")))?;
+        .map_err(|e| Error::UpstreamProtocol(format!("JWT payload is not JSON: {e}")))?;
     let mut claim = &body;
     for key in key_path {
         match claim.get(*key) {

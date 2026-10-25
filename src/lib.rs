@@ -24,3 +24,10 @@ pub use catalog::{AuthSpec, Catalog, Client, ProviderProfile, ServiceDef};
 pub use effects::*;
 pub use providers::*;
 pub use transport::*;
+
+/// Compile the README quickstart as a doctest so the published example
+/// cannot drift from the API.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+#[doc(hidden)]
+pub struct ReadmeDoctests;

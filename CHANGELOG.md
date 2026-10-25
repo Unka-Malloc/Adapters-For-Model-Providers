@@ -24,8 +24,9 @@ All notable changes to `a4mp` are recorded here. Versions follow
   local `Error::Protocol` (including a real wire-decoder failure) and
   `Error::UpstreamProtocol`, plus a real-socket transport test that cancels
   after the request has been dispatched.
-- The README quickstart now compiles against the current `Client` and
-  `RequestControl` APIs.
+- The README quickstart now uses the current `Client`, `Catalog`,
+  `ChatRequest` and `RequestControl` APIs, and is compiled as a doctest so
+  it cannot drift again.
 
 ## [0.3.0] - 2026-10-25
 

@@ -332,11 +332,11 @@ fn codex_account_id_falls_back_to_id_token() {
 }
 
 #[test]
-fn codex_account_id_missing_claim_is_protocol_error() {
+fn codex_account_id_missing_claim_is_upstream_protocol_error() {
     let access = fake_jwt(serde_json::json!({"sub": "user-1"}));
     match codex_account_id(&oauth_token(&access, serde_json::json!({}))) {
         Err(Error::UpstreamProtocol(_)) => {}
-        other => panic!("expected Protocol error, got {other:?}"),
+        other => panic!("expected UpstreamProtocol error, got {other:?}"),
     }
 }
 
@@ -359,9 +359,9 @@ fn jwt_claim_walks_paths_and_reports_missing() {
         serde_json::Value::Null
     );
 
-    // A non-JWT value is a protocol violation, not a silent null.
+    // A non-JWT value is an upstream protocol violation, not a silent null.
     match jwt_claim(&Secret::new("opaque"), &["top"]) {
-        Err(Error::Protocol(_)) => {}
-        other => panic!("expected Protocol error, got {other:?}"),
+        Err(Error::UpstreamProtocol(_)) => {}
+        other => panic!("expected UpstreamProtocol error, got {other:?}"),
     }
 }
