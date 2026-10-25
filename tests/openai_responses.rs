@@ -427,3 +427,66 @@ fn stream_reasoning_done_only_keeps_text() {
     assert_eq!(reasoning, "thought");
     assert!(events.iter().any(|e| matches!(e, StreamEvent::PartFinished { index: 0 })));
 }
+
+#[test]
+fn stream_empty_reasoning_delta_does_not_suppress_done_payload() {
+    let frames = vec![
+        frame(
+            "response.output_item.added",
+            json!({"output_index": 0, "item": {"type": "reasoning", "id": "rs_1"}}),
+        ),
+        frame(
+            "response.reasoning_summary_text.delta",
+            json!({"output_index": 0, "delta": ""}),
+        ),
+        frame(
+            "response.reasoning_summary_text.done",
+            json!({"output_index": 0, "text": "reasoned"}),
+        ),
+        frame(
+            "response.completed",
+            json!({"response": {"status": "completed"}}),
+        ),
+    ];
+    let events = decode_frames(&frames);
+    let reasoning: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            StreamEvent::ReasoningDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reasoning, ["reasoned"]);
+}
+
+#[test]
+fn stream_empty_arguments_delta_does_not_suppress_done_payload() {
+    let frames = vec![
+        frame(
+            "response.output_item.added",
+            json!({"output_index": 0, "item": {
+                "type": "function_call", "call_id": "call_4", "name": "f"}}),
+        ),
+        frame(
+            "response.function_call_arguments.delta",
+            json!({"output_index": 0, "delta": ""}),
+        ),
+        frame(
+            "response.function_call_arguments.done",
+            json!({"output_index": 0, "arguments": "{\"q\":2}"}),
+        ),
+        frame(
+            "response.completed",
+            json!({"response": {"status": "completed"}}),
+        ),
+    ];
+    let events = decode_frames(&frames);
+    let args: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            StreamEvent::ToolCallDelta { arguments, .. } => Some(arguments.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(args, ["{\"q\":2}"]);
+}
