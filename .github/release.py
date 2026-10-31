@@ -301,16 +301,28 @@ def cmd_deps(args: argparse.Namespace) -> int:
 
 def labelled_level(slug: str, branch: str, candidate: str, tag: str) -> tuple[str, list[str]]:
     since = git("log", "-1", "--format=%cs", tag)
+    # GitHub search returns at most 1000 rows for any query; there is no
+    # pagination past that ceiling. A full page therefore means the merged-PR
+    # set may be truncated — and a truncated set can silently drop the
+    # release:minor/major labels that decide the bump. Fail closed rather
+    # than default to a lower bump: releasing manually with an explicit
+    # level is the safe path when the interval overflows.
     listing = subprocess.run(
         ["gh", "pr", "list", "--repo", slug, "--base", branch, "--state", "merged",
-         "--search", f"merged:>={since}", "--limit", "500",
+         "--search", f"merged:>={since}", "--limit", "1000",
          "--json", "number,labels,mergeCommit"],
         capture_output=True, text=True,
     )
     if listing.returncode != 0:
         raise TrainError(f"listing pull requests failed: {listing.stderr.strip()}")
+    pulls = json.loads(listing.stdout)
+    if len(pulls) >= 1000:
+        raise TrainError(
+            f"merged pull requests into {branch} since {since} reached the "
+            "1000-row search ceiling; the label set may be truncated. Release "
+            "manually with an explicit level — do not guess a lower bump.")
     level, numbers = "patch", []
-    for pull in json.loads(listing.stdout):
+    for pull in pulls:
         merged = (pull.get("mergeCommit") or {}).get("oid")
         if not merged or not git_ok("merge-base", "--is-ancestor", merged, candidate):
             continue
@@ -360,13 +372,23 @@ def choose_version(
         return requested, False
     return (manifest if base is None else max(bump(base, level), manifest)), False
 
+def cargo_metadata(repo: pathlib.Path) -> dict:
+    """Workspace manifest data only: cargo runs from an empty directory with
+    --manifest-path so a checkout's .cargo/config.toml — a credential
+    provider is executable — can never load beside the release identity.
+    --no-deps suffices: member manifests carry their own dependencies."""
+    done = subprocess.run(
+        ["cargo", "metadata", "--format-version", "1", "--no-deps",
+         "--manifest-path", str(repo / "Cargo.toml")],
+        cwd=tempfile.mkdtemp(), capture_output=True, text=True, check=True,
+    )
+    return json.loads(done.stdout)
+
+
 def cmd_version(args: argparse.Namespace) -> int:
     slug = os.environ.get("GITHUB_REPOSITORY", "")
     kind = os.environ.get("RELEASE_KIND", "train")
-    metadata = json.loads(subprocess.run(
-        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
-        capture_output=True, text=True, check=True,
-    ).stdout)
+    metadata = cargo_metadata(pathlib.Path.cwd())
     members = set(metadata["workspace_members"])
     packages = [p for p in metadata["packages"] if p["id"] in members]
     publishable = [p for p in packages if p["publish"] is None or "crates-io" in p["publish"]]
@@ -451,10 +473,7 @@ def cmd_version(args: argparse.Namespace) -> int:
     return 0
 
 def publishable_members() -> dict[str, dict]:
-    metadata = json.loads(subprocess.run(
-        ["cargo", "metadata", "--format-version", "1"],
-        capture_output=True, text=True, check=True,
-    ).stdout)
+    metadata = cargo_metadata(pathlib.Path.cwd())
     members = set(metadata["workspace_members"])
     packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
     return {n: p for n, p in packages.items()
