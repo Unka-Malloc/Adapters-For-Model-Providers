@@ -1,0 +1,376 @@
+# Generated release train for Adapters-For-Model-Providers.
+# Regenerate from the release declaration instead of editing this file by
+# hand; .github/release.lock records the source inputs that produced it.
+#
+# This file holds the only job trusted with the crates.io OIDC identity.
+# Registries bind trusted publishing to this filename, which is why the
+# OIDC job lives here and not in the candidate-triggered `verify.yml`.
+# It never runs on a candidate ref: `workflow_run` executes the default
+# branch's copy of this file after the `verify` train completes, and a
+# manual dispatch is confined to the default branch by the job condition
+# below. The candidate supplies verified artifacts only — the workflow
+# definition itself is outside its reach.
+#
+# `gate` downloads the verify run's `release-inputs` artifact and exposes
+# its fields as job outputs. `release` then replays the already-verified
+# `.crate` set: no candidate-controlled code executes under the publishing
+# identity.
+#
+# Credentials: crates.io Trusted Publishing; no stored secret.
+name: publish
+
+on:
+  workflow_run:
+    workflows: ["verify"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Completed `verify` run id to publish from; validated before use
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: release-train-publish
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+    outputs:
+      run_id: ${{ github.event.workflow_run.id || inputs.run_id }}
+      mode: ${{ steps.load.outputs.mode }}
+      sha: ${{ steps.load.outputs.sha }}
+      branch: ${{ steps.load.outputs.branch }}
+      release: ${{ steps.load.outputs.release }}
+      kind: ${{ steps.load.outputs.kind }}
+      next: ${{ steps.load.outputs.next }}
+      needs_set: ${{ steps.load.outputs.needs_set }}
+      excludes: ${{ steps.load.outputs.excludes }}
+    env:
+      RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+        with:
+          name: release-inputs
+          run-id: ${{ env.RUN_ID }}
+          github-token: ${{ github.token }}
+          path: release-inputs
+
+      # The inputs file crossed out of a runner that executed candidate
+      # code — its fields must be validated as data before they can drive
+      # the OIDC job. Every key is matched against a strict shape; anything
+      # else fails the gate instead of reaching a shell expansion later.
+      - id: load
+        run: |
+          python3 - <<'PY'
+          import re, os, sys
+          SHAPES = {
+              "sha": r"[0-9a-f]{40}",
+              "branch": r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}",
+              "kind": r"(train|manual)",
+              "mode": r"(dry-run|live)",
+              "release": r"(true|false)",
+              "needs_set": r"(true|false)",
+              "next": r"[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?",
+              "excludes": r"([A-Za-z0-9_-]+( [A-Za-z0-9_-]+)*)?",
+          }
+          fields = {}
+          for line in open("release-inputs/env"):
+              key, _, value = line.strip().partition("=")
+              if not key:
+                  continue
+              shape = SHAPES.get(key)
+              if shape is None or not re.fullmatch(shape, value):
+                  raise SystemExit(f"release input fails shape check: {key}={value!r}")
+              fields[key] = value
+          missing = [k for k in SHAPES if k not in fields]
+          if missing:
+              raise SystemExit(f"release inputs missing keys: {', '.join(missing)}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              for key, value in fields.items():
+                  out.write(f"{key}={value}\n")
+          PY
+
+      # A run is bound only when it executed this repository's real
+      # verify.yml file (a same-named workflow file elsewhere does not
+      # qualify) and it succeeded. The source ref and the declared
+      # candidate are bound separately below: a `verify` workflow
+      # modified on a side branch therefore cannot forge a release
+      # decision, whether it arrives by workflow_run or by a dispatched
+      # run_id.
+      - name: Bind the run to the verify train
+        id: bind
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DECLARED_SHA: ${{ steps.load.outputs.sha }}
+          DECLARED_MODE: ${{ steps.load.outputs.mode }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" \
+            --jq '{path,conclusion,head_sha,head_branch,event}' | python3 -c "
+          import json, os, sys
+          run = json.load(sys.stdin)
+          assert run['path'] == '.github/workflows/verify.yml', \
+              f\"not verify.yml: {run['path']}\"
+          assert run['conclusion'] == 'success', \
+              f\"run did not succeed: {run['conclusion']}\"
+          # The artifact's mode is candidate-produced data; the run's event
+          # is trusted metadata. A scheduled rehearsal can never carry the
+          # live mode, so a forged mode=live dies here.
+          if run['event'] == 'schedule':
+              assert os.environ['DECLARED_MODE'] == 'dry-run', \
+                  'scheduled verify run cannot be published live'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write('ref=' + (run.get('head_branch') or '') + '\n')
+              out.write('head_sha=' + run['head_sha'] + '\n')
+          "
+
+      # Release inputs come only from verify runs on the default branch:
+      # any other ref — a release tag included — runs an untrusted
+      # revision of the verify workflow, and a pushed tag is only as
+      # trustworthy as whoever pushed it. The declared candidate must be
+      # the run's head or an ancestor of it (releasing an older
+      # default-branch commit), never a diverged or foreign sha.
+      - name: Bind the source ref to the default branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DECLARED_SHA: ${{ steps.load.outputs.sha }}
+          RUN_REF: ${{ steps.bind.outputs.ref }}
+          RUN_SHA: ${{ steps.bind.outputs.head_sha }}
+        run: |
+          default='${{ github.event.repository.default_branch }}'
+          if [ "$RUN_REF" != "$default" ]; then
+            echo "untrusted source ref: ${RUN_REF:-<none>} (expected $default)"
+            exit 1
+          fi
+          status=$(gh api \
+            "repos/$GITHUB_REPOSITORY/compare/$DECLARED_SHA...$RUN_SHA" \
+            --jq '.status' 2>/dev/null) || {
+            echo "candidate $DECLARED_SHA is not in this repository"; exit 1; }
+          case "$status" in
+            identical|ahead) ;;
+            *) echo "candidate $DECLARED_SHA is '$status' of run head $RUN_SHA"
+               exit 1 ;;
+          esac
+          echo "source is $default; candidate is $status of the run head"
+
+  release:
+    if: >-
+      github.ref_name == github.event.repository.default_branch &&
+      (github.event_name == 'workflow_dispatch' ||
+       github.event.workflow_run.conclusion == 'success') &&
+      needs.gate.outputs.mode == 'live' &&
+      needs.gate.outputs.release == 'true'
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: write
+      pull-requests: read
+      id-token: write
+    env:
+      RELEASE_MODE: live
+      SIBLINGS: '[]'
+      CANDIDATE: ${{ needs.gate.outputs.sha }}
+      BRANCH: ${{ needs.gate.outputs.branch }}
+      NEXT: ${{ needs.gate.outputs.next }}
+      NEEDS_SET: ${{ needs.gate.outputs.needs_set }}
+      EXCLUDES: ${{ needs.gate.outputs.excludes }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: Adapters-For-Model-Providers
+    steps:
+      # Git refs move inside this job, so the candidate is checked out — but
+      # nothing the verify runner produced crosses this boundary. The bump,
+      # the publish order and the .crate set are all recreated here from the
+      # bound commit by trusted workflow steps that never compile or execute
+      # candidate build scripts, tests or hooks.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: Adapters-For-Model-Providers
+          ref: ${{ needs.gate.outputs.sha }}
+          fetch-depth: 0
+
+      # An isolated cargo home plus running cargo from outside the checkout
+      # keeps a candidate .cargo/config.toml — a credential provider is an
+      # executable — from ever loading under the OIDC token. The runner
+      # context is unavailable in job env, and this step must run after
+      # checkout has created the job's default working directory.
+      - run: echo "CARGO_HOME=$RUNNER_TEMP/cargo-home" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+
+      - name: Install the pinned toolchain
+        run: |
+          if [ -f rust-toolchain.toml ] || [ -f rust-toolchain ]; then
+            rustup toolchain install
+          fi
+
+      # The bump the verify train decided is recreated here from `next`:
+      # a manifest rewrite driven by cargo metadata — data only, nothing
+      # compiles and no candidate script runs under the OIDC token.
+      - name: Commit the release version
+        if: env.NEEDS_SET == 'true'
+        run: |
+          python3 - <<'PY'
+          import json, os, re, subprocess
+          next_v = os.environ["NEXT"]
+          manifest = os.path.join(os.getcwd(), "Cargo.toml")
+          meta = json.loads(subprocess.run(
+              ["cargo", "metadata", "--format-version", "1", "--no-deps",
+               "--manifest-path", manifest],
+              capture_output=True, text=True, check=True,
+              cwd=os.environ["RUNNER_TEMP"]).stdout)
+          members = set(meta["workspace_members"])
+          packages = {p["name"]: p for p in meta["packages"] if p["id"] in members}
+          old = {p["version"] for p in packages.values()}
+          VERSION = re.compile(r'version\s*=\s*"([^"]*)"')
+          for package in packages.values():
+              path = package["manifest_path"]
+              out, in_package, bumped = [], False, False
+              for line in open(path):
+                  stripped = line.strip()
+                  if stripped.startswith("["):
+                      in_package = stripped == "[package]"
+                  match = VERSION.search(line)
+                  if match and match.group(1) in old and (
+                          in_package and not bumped or "path" in line):
+                      line = line[:match.start(1)] + next_v + line[match.end(1):]
+                      bumped |= in_package
+                  out.append(line)
+              open(path, "w").writelines(out)
+          PY
+          (cd "$RUNNER_TEMP" && cargo update --workspace \
+            --manifest-path "$GITHUB_WORKSPACE/Adapters-For-Model-Providers/Cargo.toml")
+          git add -A -- ':(glob)**/Cargo.toml' ':(glob)**/Cargo.lock'
+          # Idempotent resume: if a previous run already promoted this exact
+          # bump tree to stable, adopt that commit — a fresh sibling commit
+          # would fail the stable push as non-fast-forward before the
+          # missing crates can be re-uploaded.
+          if [ "$(git write-tree)" = "$(git rev-parse 'origin/stable^{tree}' 2>/dev/null)" ]; then
+            git reset --hard -q origin/stable
+            echo "stable already carries v$NEXT; reusing its commit"
+          else
+            git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -qam "release: v$NEXT"
+          fi
+
+      # HEAD already carries the version-bump commit when one was applied,
+      # so promote HEAD — pushing $CANDIDATE would strand stable on the
+      # pre-release commit.
+      - name: Promote the candidate to stable
+        run: git push origin "HEAD:refs/heads/stable"
+
+      - name: Authenticate to crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
+      # Dependency-first publish order is recomputed from cargo metadata —
+      # manifest data, not executed code — so the ordering matches the tree
+      # this job checked out and just bumped.
+      - name: Rebuild the release set
+        run: |
+          mkdir -p target/package
+          python3 - <<'PY' > target/package/publish-order.txt
+          import json, os, subprocess
+          meta = json.loads(subprocess.run(
+              ["cargo", "metadata", "--format-version", "1",
+               "--manifest-path", os.path.join(os.getcwd(), "Cargo.toml")],
+              capture_output=True, text=True, check=True,
+              cwd=os.environ["RUNNER_TEMP"]).stdout)
+          members = set(meta["workspace_members"])
+          packages = {p["name"]: p for p in meta["packages"] if p["id"] in members}
+          publishable = {n: p for n, p in packages.items()
+                         if p["publish"] is None or "crates-io" in p["publish"]}
+          excludes = set((os.environ.get("EXCLUDES") or "").split())
+          pending = dict.fromkeys(sorted(set(publishable) - excludes))
+          ordered = []
+          while pending:
+              ready = [n for n in pending
+                       if not any(d["name"] in pending
+                                  for d in publishable[n]["dependencies"]
+                                  if d["kind"] != "dev")]
+              if not ready:
+                  raise SystemExit(f"dependency cycle among {', '.join(sorted(pending))}")
+              ordered.extend(sorted(ready))
+              for n in ready:
+                  del pending[n]
+          for n in ordered:
+              print(f"{n}\t{publishable[n]['version']}")
+          PY
+          args=()
+          for crate in $EXCLUDES; do args+=(--exclude "$crate"); done
+          (cd "$RUNNER_TEMP" && cargo package --workspace --allow-dirty \
+            --no-verify --manifest-path "$GITHUB_WORKSPACE/Adapters-For-Model-Providers/Cargo.toml" \
+            "${args[@]}")
+
+      # The whole upload loop lives in this workflow — the only file the OIDC
+      # trust is bound to. The .crate set was packaged locally from the bound
+      # commit; tar extracts payloads as data, and `cargo publish --no-verify`
+      # uploads them without compiling or running build scripts.
+      - name: Publish the release set to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          SET: target/package
+        run: |
+          index_path() {
+            case ${#1} in
+              1) echo "1/$1";;
+              2) echo "2/$1";;
+              3) echo "3/${1:0:1}/$1";;
+              *) echo "${1:0:2}/${1:2:2}/$1";;
+            esac
+          }
+          published() { curl -fsSL "https://index.crates.io/$(index_path "$1")" | grep -q "\"vers\":\"$2\""; }
+          while IFS=$'\t' read -r name vers; do
+            [ -n "$name" ] || continue
+            if published "$name" "$vers"; then
+              echo "$name $vers is already on crates.io"
+              continue
+            fi
+            dir="$(mktemp -d)"
+            tar -xzf "$SET/$name-$vers.crate" -C "$dir"
+            package="$(find "$dir" -mindepth 1 -maxdepth 1 -type d)"
+            rm -f "$package/Cargo.toml.orig"
+            # A packaged .cargo/config.toml could name a credential
+            # provider or redirect the registry: strip it and publish with
+            # an isolated CARGO_HOME so no package-controlled Cargo
+            # configuration executes beside the token.
+            rm -rf "$package/.cargo"
+            (cd "$package" && env "CARGO_HOME=$(mktemp -d)" cargo publish --no-verify --registry crates-io)
+            for _ in $(seq 1 60); do
+              published "$name" "$vers" && break
+              sleep 10
+            done
+            published "$name" "$vers" || { echo "::error::crates.io index still lacks $name $vers"; exit 1; }
+          done < "$SET/publish-order.txt"
+
+      - name: Tag the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git rev-parse -q --verify "refs/tags/v$NEXT" >/dev/null || git tag "v$NEXT"
+          git push origin "refs/tags/v$NEXT"
+          if ! git push origin "HEAD:refs/heads/release"; then
+            echo "::error::release branch not moved: v$NEXT is not a fast-forward of it"
+            exit 1
+          fi
+          gh release view "v$NEXT" >/dev/null 2>&1 ||
+            gh release create "v$NEXT" --verify-tag --generate-notes --title "v$NEXT"
+
+      - name: Merge the release back into nightly
+        if: env.BRANCH == 'nightly'
+        run: |
+          git fetch -q origin nightly
+          if git merge-base --is-ancestor HEAD origin/nightly; then exit 0; fi
+          git checkout -q -B nightly origin/nightly
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            merge --no-ff --no-edit "v$NEXT"
+          git push origin nightly
