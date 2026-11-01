@@ -21,10 +21,13 @@
 # rule is refused outright, and a `release` environment missing from a
 # complete, readable environments listing is refused on a live bind —
 # absence is proven by enumeration, never inferred, since a lone 404 can
-# be a permission wall. Every unreadable answer only warns: a workflow
-# token has no Administration scope, and the real enforcement stays
-# server-side — GitHub applies the environment's own protection when the
-# release job enters it. To release manually,
+# be a permission wall. Anything the gate cannot positively verify is
+# unverified: a live bind fails closed there unless the operator records
+# the ALLOW_UNVERIFIED_RELEASE_ENV=1 repository variable — an explicit,
+# logged opt-in — while rehearsals always warn, since a workflow token
+# has no Administration scope and the real enforcement stays server-side:
+# GitHub applies the environment's own protection when the release job
+# enters it. To release manually,
 # dispatch `verify.yml` on the default branch instead; a live
 # (non-rehearsal) run flows into this pipeline and still meets the
 # approval gate.
@@ -267,26 +270,33 @@ jobs:
       # The decision lives in the generated helper
       # (`release.py preflight-env`), exercised by table-driven tests —
       # nothing decision-bearing stays in this file. The helper comes
-      # from the bound run's own head commit, already proven to sit on
-      # the default branch: the same trust the release job places in its
-      # staged copy, pinned tighter than a moving branch ref.
+      # from the same revision as this workflow body and the staged copy
+      # the release job runs: the default branch. Checking out the bound
+      # run's head instead would skew helper and workflow whenever a
+      # train outlives the merge that tightened the policy.
       - name: Check out the bound helper
         if: steps.load.outputs.release == 'true'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.event.repository.default_branch }}
           sparse-checkout: .github
           persist-credentials: false
 
       # Runs on every bound gate run — rehearsals get the same early
-      # warning since every inconclusive path only warns. The helper
-      # refuses only what it can prove: a `release` environment absent
-      # from a complete, readable environments listing (GitHub would
-      # auto-create one unprotected, silently removing the approval
-      # gate), no required reviewers, or an all-branches deployment
-      # rule. Unreadable or incomplete answers warn — a workflow token
-      # has no Administration scope, and enforcement stays server-side:
-      # GitHub applies the environment's own protection at job entry.
+      # warning. The helper refuses only what it can prove: a `release`
+      # environment absent from a complete, readable environments
+      # listing (GitHub would auto-create one unprotected, silently
+      # removing the approval gate), no required reviewers, or an
+      # all-branches deployment rule — refusals bind at every mode.
+      # Everything it cannot positively verify is 'unverified': a live
+      # bind fails closed there — a possibly-absent environment would
+      # proceed unprotected — unless the operator records the
+      # ALLOW_UNVERIFIED_RELEASE_ENV=1 repository variable, an opt-in
+      # the step names in the log and step summary; rehearsals always
+      # warn instead of stopping. A workflow token has no
+      # Administration scope, so unverifiable is the common case and
+      # the environment's own server-side protection still applies at
+      # job entry.
       - name: Preflight the release environment
         if: steps.load.outputs.release == 'true'
         env:
@@ -295,6 +305,8 @@ jobs:
           GITHUB_API_URL: ${{ github.api_url }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           BIND_MODE: ${{ steps.bind.outputs.mode }}
+          ALLOW_UNVERIFIED_RELEASE_ENV:
+            ${{ vars.ALLOW_UNVERIFIED_RELEASE_ENV }}
         run: python3 .github/release.py preflight-env
 
   release:

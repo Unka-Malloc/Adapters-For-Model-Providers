@@ -9,9 +9,11 @@ cargo_metadata read is stubbed with fabricated workspace data.
 from __future__ import annotations
 
 import importlib.util
+import os
 import pathlib
 import tempfile
 import unittest
+import unittest.mock
 
 HELPER = pathlib.Path(__file__).resolve().parent / "release.py"
 spec = importlib.util.spec_from_file_location("train", HELPER)
@@ -418,6 +420,47 @@ class PreflightFetchTest(unittest.TestCase):
         self.assertIsNone(
             train.link_next('<https://api.github.com/x?page=5>; rel="last"'))
         self.assertIsNone(train.link_next(None))
+
+
+class PreflightCommandTest(unittest.TestCase):
+    """The thin client turns a verdict into an exit code. A live bind
+    fails closed on anything it cannot positively verify — a possibly
+    absent environment would proceed unprotected — unless the operator
+    recorded the ALLOW_UNVERIFIED_RELEASE_ENV=1 opt-in; the opt-in never
+    exempts a proven refusal. Rehearsals always warn and continue."""
+
+    def run_preflight(self, live, opt_in, status, env, listing=None):
+        environ = {
+            "GH_TOKEN": "t",
+            "GITHUB_REPOSITORY": "o/r",
+            "DEFAULT_BRANCH": "main",
+            "BIND_MODE": "live" if live else "rehearsal",
+        }
+        if opt_in:
+            environ["ALLOW_UNVERIFIED_RELEASE_ENV"] = opt_in
+        previous_get, previous_page = train.gh_get, train.gh_paginated
+        train.gh_get = lambda _path: (status, env, None)
+        train.gh_paginated = lambda _path, _key: (
+            200, [{"name": name} for name in (listing or [])], True)
+        self.addCleanup(setattr, train, "gh_get", previous_get)
+        self.addCleanup(setattr, train, "gh_paginated", previous_page)
+        with unittest.mock.patch.dict(os.environ, environ, clear=True):
+            return train.cmd_preflight_env(
+                train.parser().parse_args(["preflight-env"]))
+
+    def test_live_fails_closed_on_unverified(self):
+        self.assertEqual(self.run_preflight(True, None, 403, None), 1)
+
+    def test_rehearsal_warns_on_unverified(self):
+        self.assertEqual(self.run_preflight(False, None, 403, None), 0)
+
+    def test_opt_in_exempts_only_unverified(self):
+        self.assertEqual(self.run_preflight(True, "1", 403, None), 0)
+        self.assertEqual(self.run_preflight(True, "yes", 403, None), 1)
+        # A proven refusal — a complete listing without `release` — is
+        # never exempted by the opt-in.
+        self.assertEqual(
+            self.run_preflight(True, "1", 404, None, ["ci"]), 1)
 
 
 if __name__ == "__main__":

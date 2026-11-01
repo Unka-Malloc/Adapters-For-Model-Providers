@@ -1006,6 +1006,11 @@ def needed_evidence(status: int, env: object) -> set[str]:
     return needed
 
 
+def status_detail(status: int) -> str:
+    """How an evidence fetch failed, phrased once for every verdict."""
+    return "transport error" if status == 0 else f"HTTP {status}"
+
+
 def preflight_verdict(
     status: int,
     env: object,
@@ -1042,18 +1047,16 @@ def preflight_verdict(
         detail = (
             "the environments listing could not be read to completion"
             if list_status == 200
-            else f"listing: HTTP {list_status}" if list_status
-            else "listing: transport error")
+            else f"listing: {status_detail(list_status)}")
         return "warn", (
             f"the `release` environment answered HTTP 404 and absence could "
             f"not be proven ({detail}); the environment's own protection "
             "still applies at job entry")
     if status != 200:
-        detail = {0: "transport error"}.get(status, f"HTTP {status}")
         return "warn", (
             f"cannot read the `release` environment's settings with this "
-            f"token ({detail}); the environment's own protection still "
-            "applies at job entry")
+            f"token ({status_detail(status)}); the environment's own "
+            "protection still applies at job entry")
     if not isinstance(env, dict):
         return "warn", (
             "the `release` environment returned an unreadable payload; the "
@@ -1169,8 +1172,26 @@ def cmd_preflight_env(args: argparse.Namespace) -> int:
               f"(a live run stops here) — {ENV_GUIDE}")
         return 0
     if verdict == "warn":
-        print(f"::warning::{message}")
-        report(f"release env preflight: warned — {message}")
+        # A live bind fails closed on anything it cannot positively
+        # verify: an environment that may be absent would be auto-created
+        # unprotected, silently dropping the approval gate. The escape
+        # hatch is an explicit, recorded operator act — the repository
+        # variable ALLOW_UNVERIFIED_RELEASE_ENV=1 — never a silent warn;
+        # rehearsals warn unconditionally as the early signal they exist
+        # to provide.
+        if live and os.environ.get("ALLOW_UNVERIFIED_RELEASE_ENV") != "1":
+            report(f"release env preflight: REFUSED — unverified: {message}")
+            print(f"::error::{message} — live publication cannot "
+                  f"positively verify the `release` environment; set the "
+                  f"repository variable ALLOW_UNVERIFIED_RELEASE_ENV=1 to "
+                  f"proceed unverified, or grant the token Environments "
+                  f"read — {ENV_GUIDE}")
+            return 1
+        opted = live and os.environ.get("ALLOW_UNVERIFIED_RELEASE_ENV") == "1"
+        suffix = (" — proceeding unverified by operator opt-in "
+                  "(ALLOW_UNVERIFIED_RELEASE_ENV=1)") if opted else ""
+        print(f"::warning::{message}{suffix}")
+        report(f"release env preflight: warned — {message}{suffix}")
         return 0
     print(message)
     report(f"release env preflight: verified — {message}")
