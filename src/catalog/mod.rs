@@ -114,8 +114,9 @@ impl ServiceDef {
     }
 
     /// [`Self::materialize`] plus the template-materialization post
-    /// checks: https only, and the resolved authority must fit the
-    /// template host pattern.
+    /// checks: `https` anywhere, `http` only toward private/loopback
+    /// authorities, and the resolved authority must fit the template
+    /// host pattern.
     fn materialize_checked(
         &self,
         provider: &ProviderId,
@@ -172,12 +173,11 @@ fn leading_var(template: &str) -> Option<&str> {
     Some(&rest[..end])
 }
 
-/// Is `url`'s host a private or loopback authority — a machine the
-/// operator addresses directly rather than a public endpoint? Plain
-/// `http` is confined to this class so a caller-supplied endpoint can
-/// never put credential-bearing traffic in cleartext on a public path;
-/// `https` is accepted everywhere.
-fn endpoint_host_is_private(url: &url::Url) -> bool {
+/// Is `url`'s host a literal private or loopback IP — loopback,
+/// RFC1918, link-local, CGNAT `100.64/10`, or the IPv6 equivalents?
+/// A literal needs no resolution, so it can never answer with a
+/// public address.
+fn endpoint_host_is_private_ip(url: &url::Url) -> bool {
     match url.host() {
         Some(url::Host::Ipv4(ip)) => {
             ip.is_loopback()
@@ -188,10 +188,33 @@ fn endpoint_host_is_private(url: &url::Url) -> bool {
         Some(url::Host::Ipv6(ip)) => {
             ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local()
         }
+        _ => false,
+    }
+}
+
+/// Is `url`'s host a private or loopback authority — a machine the
+/// operator addresses directly rather than a public endpoint? Plain
+/// `http` is confined to this class so a caller-supplied endpoint can
+/// never put credential-bearing traffic in cleartext on a public path;
+/// `https` is accepted everywhere.
+fn endpoint_host_is_private(url: &url::Url) -> bool {
+    match url.host() {
         Some(url::Host::Domain(domain)) => {
             domain == "localhost" || domain.ends_with(".localhost") || domain.ends_with(".internal")
         }
-        None => false,
+        _ => endpoint_host_is_private_ip(url),
+    }
+}
+
+/// The stricter host class a credential-bearing `http` bind may use:
+/// a literal private/loopback IP or `localhost`/`*.localhost`. Named
+/// private hosts such as `.internal` resolve through the operator's
+/// DNS and can answer a public address, so cleartext credential
+/// traffic is confined to authorities a resolved name cannot spoof.
+fn endpoint_host_is_literal_private(url: &url::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(domain)) => domain == "localhost" || domain.ends_with(".localhost"),
+        _ => endpoint_host_is_private_ip(url),
     }
 }
 
@@ -220,6 +243,33 @@ fn check_endpoint_url(provider: &ProviderId, url: &url::Url) -> Result<(), Error
     }
 }
 
+/// The credential-cleartext rule applied when an auth kind rides the
+/// request: `http` binds only toward a literal private/loopback
+/// authority — an IP literal or `localhost`/`*.localhost`. A named
+/// private host (`.internal`, any other name) resolves through the
+/// operator's DNS and can answer a public address, so credentials may
+/// cross cleartext to it never; credential-free binds and `https`
+/// endpoints are unaffected. Every kind but `None` counts as
+/// credential-bearing — an `External` client may attach its own.
+fn check_cleartext_credential_policy(
+    provider: &ProviderId,
+    url: &url::Url,
+    auth: &AuthKind,
+) -> Result<(), Error> {
+    if url.scheme() == "http"
+        && !matches!(auth, AuthKind::None)
+        && !endpoint_host_is_literal_private(url)
+    {
+        return Err(Error::Protocol(format!(
+            "profile {} endpoint is cleartext http to a resolved name — a \
+             credential-bearing bind requires https or a literal \
+             private/loopback authority (an IP literal or localhost)",
+            provider.as_str()
+        )));
+    }
+    Ok(())
+}
+
 /// One endpoint variable's value class comes from its position in the
 /// template. A leading `{name}` carries the endpoint URL itself (local
 /// servers and host-managed gateways declare nothing else): the value
@@ -235,13 +285,16 @@ fn check_endpoint_var(
     template: &str,
 ) -> Result<(), Error> {
     if leading_var(template) == Some(key) {
+        // Parse the value once, run the shared endpoint policy for the
+        // scheme and host class, then apply the variable-specific
+        // checks — a host must be present and no credentials may be
+        // embedded — under the variable's own error message.
         let clean = url::Url::parse(value)
             .map(|url| {
-                matches!(url.scheme(), "http" | "https")
+                check_endpoint_url(provider, &url).is_ok()
                     && url.host_str().is_some()
                     && url.username().is_empty()
                     && url.password().is_none()
-                    && (url.scheme() == "https" || endpoint_host_is_private(&url))
             })
             .unwrap_or(false);
         if !clean {
@@ -665,7 +718,11 @@ impl Client {
     /// only toward private or loopback authorities (`localhost`, a
     /// loopback/private/link-local IP, or an `.internal` name); every
     /// materialized endpoint — templated or literal — is refused in
-    /// cleartext to a public host.
+    /// cleartext to a public host. When `auth` carries credentials
+    /// (every kind but `AuthKind::None`), `http` is further confined to
+    /// a literal authority — a private/loopback IP literal or
+    /// `localhost`/`*.localhost` — because a named private host can
+    /// resolve to a public address.
     pub fn bind_provider_with(
         &self,
         provider: &str,
@@ -690,6 +747,7 @@ impl Client {
                 .clone(),
         };
         let target = profile.try_target_for(&protocol, region, vars)?;
+        check_cleartext_credential_policy(&profile.id, &target.base_url, &auth)?;
         self.catalog.bind(
             target,
             auth,

@@ -5,9 +5,11 @@
 # The per-change gate: pushes to the default branch and pull requests
 # targeting it run the repository's own verify command, then recompute the
 # generated-file hashes recorded in .github/release.lock so a hand edit to
-# a generated file cannot pass undetected. The signed release machinery
-# lives in verify.yml/publish.yml — this file holds no OIDC identity and
-# needs no credentials.
+# a generated file cannot pass undetected. The generated helper ships its
+# own tests beside it, and the verify command owns running them — this
+# file deliberately carries no second helper-test step. The signed release
+# machinery lives in verify.yml/publish.yml — this file holds no OIDC
+# identity and needs no credentials.
 name: ci
 
 on: [push, pull_request]
@@ -81,9 +83,3 @@ jobs:
                                "regenerate instead of editing: " + ", ".join(stale))
           print(f"release.lock provenance verified for {len(recorded)} file(s)")
           PY
-
-      # The generated helper ships its own tests beside it: table-driven
-      # coverage of the manifest rewriter and its post-check over
-      # synthetic manifests — plain python3, no cargo, no network.
-      - name: Test the generated release helper
-        run: python3 .github/test_release.py

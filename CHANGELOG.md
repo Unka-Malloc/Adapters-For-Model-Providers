@@ -32,7 +32,12 @@ All notable changes to `a4mp` are recorded here. Versions follow
   are trusted to the operator's own resolver, while spoofable classes
   (mDNS `.local`, search-domain single labels, arbitrary `.lan` zones)
   are not accepted. `https` endpoints bind anywhere and embedded
-  credentials remain refused. Variables a target's template does not
+  credentials remain refused. A credential-bearing `http` bind (every
+  `AuthKind` but `None`) is further confined to literal authorities —
+  a private/loopback IP literal or `localhost`/`*.localhost` — because
+  a named private host resolves through the operator's DNS and can
+  answer a public address; named hosts bind over `http` only without
+  credentials. Variables a target's template does not
   name stay inert, so one shared vars map can feed several targets, and
   trailing slashes on an `endpoint` value no longer yield `//v1` paths.
 
@@ -68,6 +73,12 @@ All notable changes to `a4mp` are recorded here. Versions follow
   region-selected `local-proxy` — plus trailing-slash normalization,
   public-IP `http` refusal (TEST-NET-3), private-host `http`
   acceptance, and shared vars maps carrying keys for sibling targets.
+  Literal `base_url` paths are covered by the same policy — a private
+  IP literal binds, a `{name}` atom expanding onto `.internal`
+  materializes, and a public IP literal fails with the cleartext
+  message — and credential-bearing `http` binds are refused toward
+  spoofable named hosts (`.internal`) while literal IPs, `localhost`
+  and any `https` endpoint still bind under every credential kind.
 
 ## [0.3.2] - 2026-10-25
 

@@ -393,13 +393,14 @@ async fn local_profiles_bind_the_runtime_endpoint() {
         adapter.target().base_url.as_str(),
         "http://models.internal:8000/"
     );
-    // A region-selected template (privatemode's local proxy) binds too.
+    // A region-selected template (privatemode's local proxy) binds too —
+    // credential-free, since a named http host may not carry credentials.
     let adapter = client
         .bind_provider_with(
             "privatemode",
             Some(Protocol::OpenAiChatCompletions),
             Some("local-proxy"),
-            AuthKind::ApiKey,
+            AuthKind::None,
             &vars,
         )
         .unwrap();
@@ -459,6 +460,91 @@ async fn http_endpoints_stay_on_private_hosts() {
     client
         .bind_provider_with("ollama", None, None, AuthKind::None, &vars)
         .unwrap();
+}
+
+#[tokio::test]
+async fn cleartext_credentials_stay_on_literal_hosts() {
+    let (client, _) = client();
+    // A named private host resolves through the operator's DNS and can
+    // answer a public address, so a credential-bearing bind may not
+    // ride cleartext to it — under every credential-bearing auth kind.
+    for auth in [
+        AuthKind::ApiKey,
+        AuthKind::Bearer,
+        AuthKind::CloudIdentity {
+            service: "test".into(),
+        },
+    ] {
+        let vars = std::collections::BTreeMap::from([("endpoint", "http://nas.internal")]);
+        match client.bind_provider_with("ollama", None, None, auth, &vars) {
+            Err(Error::Protocol(m)) => assert!(m.contains("cleartext http"), "{m}"),
+            Err(e) => {
+                panic!("cleartext credentials to a named host must fail with Protocol, got {e:?}")
+            }
+            Ok(_) => panic!("cleartext credentials to a named host must fail, got Ok"),
+        }
+    }
+    // Literal private/loopback authorities and localhost still bind
+    // with credentials.
+    for good in [
+        "http://192.168.1.5:11434",
+        "http://127.0.0.1:11434",
+        "http://100.64.1.2:8000",
+        "http://localhost:11434",
+        "http://printer.localhost:8080",
+    ] {
+        let vars = std::collections::BTreeMap::from([("endpoint", good)]);
+        client
+            .bind_provider_with("ollama", None, None, AuthKind::ApiKey, &vars)
+            .unwrap_or_else(|e| {
+                panic!("credentials to literal http endpoint {good:?} must bind: {e:?}")
+            });
+    }
+    // https carries credentials anywhere, named hosts included.
+    for good in ["https://nas.internal", "https://api.example.com"] {
+        let vars = std::collections::BTreeMap::from([("endpoint", good)]);
+        client
+            .bind_provider_with("ollama", None, None, AuthKind::ApiKey, &vars)
+            .unwrap_or_else(|e| panic!("credentials to https endpoint {good:?} must bind: {e:?}"));
+    }
+}
+
+#[test]
+fn literal_base_urls_follow_the_same_endpoint_policy() {
+    // A literal private http endpoint binds.
+    let def = ServiceDef {
+        protocol: Protocol::OpenAiChatCompletions,
+        base_url: "http://192.168.1.5:8080",
+        region: None,
+        headers: &[],
+    };
+    let target = def.target(&"test".into()).unwrap();
+    assert_eq!(target.base_url.host_str(), Some("192.168.1.5"));
+    assert_eq!(target.base_url.port(), Some(8080));
+
+    // An atom template expanding onto a named private host binds.
+    let def = ServiceDef {
+        protocol: Protocol::OpenAiChatCompletions,
+        base_url: "http://{resource}.internal",
+        region: None,
+        headers: &[],
+    };
+    let vars = std::collections::BTreeMap::from([("resource", "nas")]);
+    let target = def.target_with(&"test".into(), &vars).unwrap();
+    assert_eq!(target.base_url.as_str(), "http://nas.internal/");
+
+    // A literal public http endpoint fails closed with the distinct
+    // cleartext message.
+    let def = ServiceDef {
+        protocol: Protocol::OpenAiChatCompletions,
+        base_url: "http://203.0.113.10",
+        region: None,
+        headers: &[],
+    };
+    match def.target(&"test".into()) {
+        Err(Error::Protocol(m)) => assert!(m.contains("cleartext http"), "{m}"),
+        other => panic!("public http literal must fail, got {other:?}"),
+    }
 }
 
 #[tokio::test]

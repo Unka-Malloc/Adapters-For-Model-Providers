@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fnmatch
 import json
 import os
 import pathlib
@@ -21,6 +22,7 @@ import tempfile
 import time
 import tomllib
 import urllib.error
+import urllib.parse
 import urllib.request
 
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
@@ -892,6 +894,289 @@ def cmd_set_version(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- Release-environment preflight ----------------------------------------
+#
+# The publish gate asks GitHub whether the `release` environment carries
+# the shape the OIDC job relies on — required reviewers plus a deployment
+# branch rule limited to the default branch — and refuses only what an
+# answer can prove. The default workflow token has no Administration
+# scope, so protection settings usually read as 404/403: every unreadable
+# or incomplete answer is a warning, never a block, because real
+# enforcement is server-side — GitHub applies the environment's own
+# protection when the release job enters it. The check exists for the
+# catastrophic case: GitHub auto-creates a missing environment,
+# unprotected, and the approval gate would vanish with no signal — so a
+# complete, readable environments listing without `release` is refused
+# outright, while a lone 404 proves nothing (permission walls surface as
+# 404 too).
+
+ENV_GUIDE = ("required reviewers plus a deployment-branch rule limited to "
+             "the default branch — create it under Settings → Environments → "
+             "release, then bind crates.io Trusted Publishing to it")
+
+LINK_NEXT = re.compile(r'<([^>]+)>\s*;\s*rel="next"')
+
+
+def gh_get(path: str) -> tuple[int, object, object]:
+    """One GET against the repository's REST API: a `path` starting with
+    http is used as-is (a pagination Link target), anything else resolves
+    under /repos/<slug>. Returns (status, payload, headers) — status 0 on
+    a transport failure, payload None whenever the body cannot be read."""
+    url = (path if path.startswith("http")
+           else f"{os.environ.get('GITHUB_API_URL', 'https://api.github.com')}"
+                f"/repos/{os.environ['GITHUB_REPOSITORY']}{path}")
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            try:
+                payload = json.loads(response.read().decode())
+            except (ValueError, UnicodeDecodeError):
+                payload = None
+            return response.status, payload, response.headers
+    except urllib.error.HTTPError as error:
+        return error.code, None, error.headers
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return 0, None, None
+
+
+def link_next(header: str | None) -> str | None:
+    """The rel="next" URL out of a Link header, or None."""
+    if not header:
+        return None
+    found = LINK_NEXT.search(header)
+    return found.group(1) if found else None
+
+
+def gh_paginated(path: str, key: str) -> tuple[int, list, bool]:
+    """A paginated list endpoint walked to completion — `per_page=100`,
+    then each Link rel="next" (a `page=` walk when no Link header
+    arrives) until the collected rows reach the payload's own
+    total_count. Returns (status, rows, complete): complete stays False
+    the moment any page is unreadable or the walk cannot finish — a
+    partial enumeration proves nothing and never stands in for absence."""
+    sep = "&" if "?" in path else "?"
+    url, rows, total, page = f"{path}{sep}per_page=100", [], None, 1
+    for _ in range(50):
+        status, payload, headers = gh_get(url)
+        if status != 200 or not isinstance(payload, dict):
+            return status, rows, False
+        batch = payload.get(key)
+        if not isinstance(batch, list):
+            return 200, rows, False
+        rows.extend(batch)
+        if total is None and isinstance(payload.get("total_count"), int):
+            total = payload["total_count"]
+        if total is not None and len(rows) >= total:
+            return 200, rows, True
+        if total is None and len(batch) < 100:
+            return 200, rows, True  # a short page without a count ends the list
+        nxt = link_next(headers.get("Link") if headers else None)
+        if nxt:
+            url = nxt
+        else:
+            page += 1
+            url = f"{path}{sep}per_page=100&page={page}"
+    return 200, rows, False
+
+
+def needed_evidence(status: int, env: object) -> set[str]:
+    """Which sub-fetches a (status, payload) pair calls for — the driver
+    gathers only the facets the payload itself references: `listing` to
+    prove absence on a 404, `branch`/`policies` when the deployment
+    branch policy enables those mechanisms."""
+    if status == 404:
+        return {"listing"}
+    if status != 200 or not isinstance(env, dict):
+        return set()
+    policy = env.get("deployment_branch_policy")
+    if not isinstance(policy, dict):
+        return set()
+    needed = set()
+    if policy.get("protected_branches"):
+        needed.add("branch")
+    if policy.get("custom_branch_policies"):
+        needed.add("policies")
+    return needed
+
+
+def preflight_verdict(
+    status: int,
+    env: object,
+    evidence: dict,
+    default: str,
+    live: bool,
+) -> tuple[str, str]:
+    """The `release` environment decision from fetched evidence alone —
+    no I/O, so every row of the contract is exercised from a table.
+
+    `evidence` carries the sub-fetch results `needed_evidence` asked the
+    driver for: "listing" is (status, complete, names) of a paginated
+    /environments walk, "policies" is (status, complete, names) of a
+    paginated deployment-branch-policies walk, and "branch" is
+    (status, protected) of the default branch. Returns (verdict,
+    message); verdict is "pass", "warn" or "refuse" — the caller maps
+    refuse to a hard stop on live and a loud warning on rehearsal."""
+    if status == 404:
+        # Absence is conclusive only from a complete, readable
+        # enumeration: a lone 404 cannot tell a missing environment from
+        # a permission wall.
+        list_status, complete, names = evidence.get("listing", (0, False, []))
+        if list_status == 200 and complete:
+            if "release" not in names:
+                verdict = "refuse" if live else "warn"
+                return verdict, (
+                    "this repository has no `release` environment — GitHub "
+                    "would create an unprotected one when the release job "
+                    "starts, silently removing the approval gate")
+            return "warn", (
+                "the environments listing names `release` yet its own "
+                "endpoint answered HTTP 404 — treated as unreadable; the "
+                "environment's own protection still applies at job entry")
+        detail = (
+            "the environments listing could not be read to completion"
+            if list_status == 200
+            else f"listing: HTTP {list_status}" if list_status
+            else "listing: transport error")
+        return "warn", (
+            f"the `release` environment answered HTTP 404 and absence could "
+            f"not be proven ({detail}); the environment's own protection "
+            "still applies at job entry")
+    if status != 200:
+        detail = {0: "transport error"}.get(status, f"HTTP {status}")
+        return "warn", (
+            f"cannot read the `release` environment's settings with this "
+            f"token ({detail}); the environment's own protection still "
+            "applies at job entry")
+    if not isinstance(env, dict):
+        return "warn", (
+            "the `release` environment returned an unreadable payload; the "
+            "environment's own protection still applies at job entry")
+
+    skipped: list[str] = []
+    # Key absent → a facet this payload does not expose (skipped, then
+    # warned); key present → the facet is asserted. A present
+    # protection_rules without a required_reviewers rule carrying
+    # reviewers is a misconfiguration, refused outright.
+    if "protection_rules" not in env:
+        skipped.append("required reviewers (payload omits protection_rules)")
+    elif not any(
+        isinstance(rule, dict)
+        and rule.get("type") == "required_reviewers"
+        and rule.get("reviewers")
+        for rule in env.get("protection_rules") or []
+    ):
+        return "refuse", "the `release` environment has no required reviewers"
+    if "deployment_branch_policy" not in env:
+        skipped.append("deployment-branch rule (payload omits "
+                       "deployment_branch_policy)")
+    else:
+        policy = env.get("deployment_branch_policy")
+        if policy is None:
+            # null is GitHub's documented spelling for "every branch may
+            # deploy" — a set policy with no restriction — not an omitted
+            # setting, so it is refused, not skipped.
+            return "refuse", (
+                "the `release` environment lets every branch deploy — "
+                "deployment_branch_policy reads null (no restriction)")
+        if not isinstance(policy, dict):
+            skipped.append("deployment-branch rule (unreadable "
+                           "deployment_branch_policy)")
+        elif not policy.get("protected_branches") \
+                and not policy.get("custom_branch_policies"):
+            return "refuse", "the `release` environment lets every branch deploy"
+        else:
+            if policy.get("protected_branches"):
+                branch_status, protected = evidence.get("branch", (0, None))
+                if branch_status != 200:
+                    skipped.append(f"branch protection on `{default}` "
+                                   f"(HTTP {branch_status})")
+                elif not protected:
+                    return "refuse", (
+                        f"only protected branches may deploy to `release`, "
+                        f"but `{default}` is not a protected branch")
+            if policy.get("custom_branch_policies"):
+                policies_status, policies_done, names = evidence.get(
+                    "policies", (0, False, []))
+                if policies_status != 200 or not policies_done:
+                    skipped.append(
+                        f"deployment-branch rules (HTTP {policies_status}, "
+                        "enumeration incomplete)")
+                elif not any(
+                    fnmatch.fnmatchcase(default, str(name)) for name in names
+                ):
+                    return "refuse", (
+                        f"no `release` deployment-branch rule lets the "
+                        f"default branch `{default}` deploy "
+                        f"(rules: {', '.join(map(str, names)) or 'none'})")
+    if skipped:
+        return "warn", (
+            f"release environment partially verified — unverified: "
+            f"{'; '.join(skipped)} — confirm them under Settings → "
+            "Environments → release")
+    return "pass", ("required reviewers and a bounded deployment-branch "
+                    "rule are in place")
+
+
+def cmd_preflight_env(args: argparse.Namespace) -> int:
+    """The publish gate's thin client: fetch the evidence the payload
+    calls for, hand it to the pure verdict, render the result. A refusal
+    exits 1 on a live bind and lands as an error annotation on a
+    rehearsal; warnings annotate the run and the step summary."""
+    if not os.environ.get("GH_TOKEN") or not os.environ.get("GITHUB_REPOSITORY"):
+        raise TrainError("preflight-env needs GH_TOKEN and GITHUB_REPOSITORY")
+    default = os.environ.get("DEFAULT_BRANCH")
+    if not default:
+        raise TrainError("preflight-env needs DEFAULT_BRANCH")
+    live = os.environ.get("BIND_MODE") == "live"
+    status, env, _ = gh_get("/environments/release")
+    evidence: dict[str, tuple] = {}
+    for need in needed_evidence(status, env):
+        if need == "listing":
+            list_status, rows, complete = gh_paginated(
+                "/environments", "environments")
+            evidence["listing"] = (
+                list_status, complete,
+                [row.get("name") for row in rows if isinstance(row, dict)])
+        elif need == "branch":
+            branch_status, branch, _ = gh_get(
+                f"/branches/{urllib.parse.quote(default, safe='')}")
+            evidence["branch"] = (
+                branch_status,
+                branch.get("protected") if isinstance(branch, dict) else None)
+        elif need == "policies":
+            policies_status, rows, complete = gh_paginated(
+                "/environments/release/deployment-branch-policies",
+                "branch_policies")
+            evidence["policies"] = (
+                policies_status, complete,
+                [row.get("name") for row in rows if isinstance(row, dict)])
+    verdict, message = preflight_verdict(status, env, evidence, default, live)
+    if verdict == "refuse":
+        report(f"release env preflight: REFUSED — {message}")
+        if live:
+            print(f"::error::{message} — {ENV_GUIDE}")
+            return 1
+        # A rehearsal surfaces the refusal loudly without blocking: the
+        # same verdict a live run stops on lands as an error annotation.
+        print(f"::error::rehearsal — {message} "
+              f"(a live run stops here) — {ENV_GUIDE}")
+        return 0
+    if verdict == "warn":
+        print(f"::warning::{message}")
+        report(f"release env preflight: warned — {message}")
+        return 0
+    print(message)
+    report(f"release env preflight: verified — {message}")
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="release.py")
     commands = root.add_subparsers(dest="command", required=True)
@@ -917,6 +1202,8 @@ def parser() -> argparse.ArgumentParser:
     freshness = commands.add_parser("freshness")
     freshness.add_argument("--window-days", type=int, default=14)
     freshness.set_defaults(run=cmd_freshness)
+    preflight = commands.add_parser("preflight-env")
+    preflight.set_defaults(run=cmd_preflight_env)
     return root
 
 
