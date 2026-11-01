@@ -88,7 +88,15 @@ impl ServiceDef {
                 )));
             }
         }
-        self.materialize_checked(provider, &resolved)
+        // The post-substitution checks exist to keep a host-supplied value
+        // inside the declared endpoint — they only apply when the template
+        // actually carried placeholders. A literal base URL (a local
+        // `http://` provider) follows the plain parse path.
+        if self.base_url.contains('{') {
+            self.materialize_checked(provider, &resolved)
+        } else {
+            self.materialize(provider, &resolved)
+        }
     }
 
     /// [`Self::materialize`] plus the template-materialization post

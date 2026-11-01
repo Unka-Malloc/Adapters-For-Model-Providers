@@ -336,6 +336,17 @@ async fn template_bind_rejects_bad_value_before_dispatch() {
     assert!(transport.recorded().is_empty());
 }
 
+#[tokio::test]
+async fn bind_provider_accepts_builtin_local_http_targets() {
+    let (client, _) = client();
+    for provider in ["ollama", "lmstudio"] {
+        let adapter = client
+            .bind_provider(provider, None, None, AuthKind::None)
+            .unwrap_or_else(|e| panic!("builtin {provider} must bind: {e:?}"));
+        assert_eq!(adapter.target().base_url.scheme(), "http");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Target selection: regions, fallback, empty profiles
 // ---------------------------------------------------------------------------
