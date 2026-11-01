@@ -418,8 +418,8 @@ pub fn profiles() -> Vec<ProviderProfile> {
             aliases: &[],
             auth: vec![AuthSpec::None, AuthSpec::ApiKey],
             targets: vec![
-                target(native("ollama"), "http://localhost:11434"),
-                target(CHAT, "http://localhost:11434/v1"),
+                target(native("ollama"), "{endpoint}"),
+                target(CHAT, "{endpoint}/v1"),
             ],
             catalogue: Some("ollama"),
         },
@@ -436,7 +436,7 @@ pub fn profiles() -> Vec<ProviderProfile> {
             name: "LM Studio",
             aliases: &[],
             auth: vec![AuthSpec::None],
-            targets: vec![target(CHAT, "http://localhost:1234/v1")],
+            targets: vec![target(CHAT, "{endpoint}/v1")],
             catalogue: Some("lmstudio"),
         },
         ProviderProfile {

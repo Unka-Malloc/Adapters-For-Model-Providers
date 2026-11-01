@@ -337,13 +337,47 @@ async fn template_bind_rejects_bad_value_before_dispatch() {
 }
 
 #[tokio::test]
-async fn bind_provider_accepts_builtin_local_http_targets() {
+async fn local_profiles_require_a_runtime_endpoint() {
     let (client, _) = client();
-    for provider in ["ollama", "lmstudio"] {
-        let adapter = client
-            .bind_provider(provider, None, None, AuthKind::None)
-            .unwrap_or_else(|e| panic!("builtin {provider} must bind: {e:?}"));
-        assert_eq!(adapter.target().base_url.scheme(), "http");
+    for provider in ["ollama", "lmstudio", "omlx", "mlx-serve"] {
+        match client.bind_provider(provider, None, None, AuthKind::None) {
+            Err(Error::Protocol(msg)) => {
+                assert!(msg.contains("{endpoint}"), "{provider}: {msg}")
+            }
+            Err(e) => panic!("{provider} without an endpoint must fail with Protocol, got {e:?}"),
+            Ok(_) => panic!("{provider} without an endpoint must fail, got Ok"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn local_profiles_bind_the_runtime_endpoint() {
+    let (client, _) = client();
+    let vars = std::collections::BTreeMap::from([("endpoint", "http://models.internal:8000")]);
+    let adapter = client
+        .bind_provider_with("ollama", None, None, AuthKind::None, &vars)
+        .unwrap();
+    let url = &adapter.target().base_url;
+    assert_eq!(url.scheme(), "http");
+    assert_eq!(url.host_str(), Some("models.internal"));
+    assert_eq!(url.port(), Some(8000));
+}
+
+#[tokio::test]
+async fn endpoint_variables_must_be_clean_http_urls() {
+    let (client, _) = client();
+    for bad in [
+        "ftp://models.internal",
+        "http://user:pw@models.internal",
+        "not a url",
+        "",
+    ] {
+        let vars = std::collections::BTreeMap::from([("endpoint", bad)]);
+        match client.bind_provider_with("ollama", None, None, AuthKind::None, &vars) {
+            Err(Error::Protocol(_)) => {}
+            Err(e) => panic!("endpoint {bad:?} must fail with Protocol, got {e:?}"),
+            Ok(_) => panic!("endpoint {bad:?} must fail, got Ok"),
+        }
     }
 }
 

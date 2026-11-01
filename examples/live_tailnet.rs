@@ -1,13 +1,16 @@
-//! Live verification against the Tailscale Windows-laptop model.
-//!
 //! Live verification against a self-hosted model rig.
 //!
 //! Point it at a host running:
-//!   - llama-server on :8080 (native OpenAI + vision)
-//!   - dialect gateway on :8090 (Anthropic + Gemini surfaces)
-//!   - ollama serve on :11434 (native Ollama + /api/embed)
+//!   - a native OpenAI-compatible server (vision capable)
+//!   - a dialect gateway (Anthropic + Gemini surfaces)
+//!   - ollama serve (native Ollama + /api/embed)
 //!
-//!   A4MP_LIVE_HOST=host.tailnet cargo run --example live_tailnet
+//! Every endpoint arrives at runtime — no address is compiled in:
+//!
+//!   A4MP_LIVE_OPENAI_ENDPOINT=<base URL of the OpenAI surface> \
+//!   A4MP_LIVE_GATEWAY_ENDPOINT=<base URL of the dialect gateway> \
+//!   A4MP_LIVE_OLLAMA_ENDPOINT=<base URL of the ollama server> \
+//!   cargo run --example live_tailnet
 //!
 //! Set NO_PROXY for the host if a local HTTP proxy is configured.
 
@@ -107,17 +110,25 @@ async fn run_stream(adapter: &dyn Adapter, label: &str, model: &str) {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let host = std::env::var("A4MP_LIVE_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+    fn endpoint(var: &str, what: &str) -> String {
+        std::env::var(var).unwrap_or_else(|_| {
+            eprintln!("{var} is required ({what})");
+            std::process::exit(2);
+        })
+    }
+    let openai_endpoint = endpoint("A4MP_LIVE_OPENAI_ENDPOINT", "the OpenAI surface's base URL");
+    let gateway_endpoint = endpoint(
+        "A4MP_LIVE_GATEWAY_ENDPOINT",
+        "the dialect gateway's base URL",
+    );
+    let ollama_endpoint = endpoint("A4MP_LIVE_OLLAMA_ENDPOINT", "the ollama server's base URL");
     let transport = Arc::new(ReqwestTransport::new());
     let resolver = Arc::new(NoCredentials);
     let model = "qwen3.6-35b-a3b";
 
-    // 1. Native OpenAI surface (llama-server :8080)
+    // 1. Native OpenAI surface
     let oa = OpenAiAdapter::new(
-        target(
-            Protocol::OpenAiChatCompletions,
-            format!("http://{host}:8080/v1"),
-        ),
+        target(Protocol::OpenAiChatCompletions, openai_endpoint),
         AuthKind::None,
         transport.clone(),
         resolver.clone(),
@@ -130,9 +141,9 @@ async fn main() {
         Err(e) => println!("[openai] models FAIL   {e}"),
     }
 
-    // 2. Anthropic Messages via gateway :8090
+    // 2. Anthropic Messages via the gateway
     let an = AnthropicAdapter::new(
-        target(Protocol::AnthropicMessages, format!("http://{host}:8090")),
+        target(Protocol::AnthropicMessages, gateway_endpoint.clone()),
         AuthKind::ApiKey,
         transport.clone(),
         resolver.clone(),
@@ -141,12 +152,9 @@ async fn main() {
     run_chat(&an, "anthropic", model).await;
     run_stream(&an, "anthropic", model).await;
 
-    // 3. Gemini generateContent via gateway :8090
+    // 3. Gemini generateContent via the gateway
     let ge = GeminiAdapter::new(
-        target(
-            Protocol::GeminiGenerateContent,
-            format!("http://{host}:8090"),
-        ),
+        target(Protocol::GeminiGenerateContent, gateway_endpoint),
         AuthKind::ApiKey,
         transport.clone(),
         resolver.clone(),
@@ -155,13 +163,10 @@ async fn main() {
     run_chat(&ge, "gemini", model).await;
     run_stream(&ge, "gemini", model).await;
 
-    // 4. Ollama NATIVE on :11434 (real ollama serve, qwen36 registered
+    // 4. Ollama native surface (real ollama serve, qwen36 registered
     //    from the same GGUF; nomic-embed for vectors)
     let ol = OllamaAdapter::new(
-        target(
-            Protocol::Other("ollama".into()),
-            format!("http://{host}:11434"),
-        ),
+        target(Protocol::Other("ollama".into()), ollama_endpoint),
         AuthKind::None,
         transport.clone(),
         resolver.clone(),

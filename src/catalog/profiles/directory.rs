@@ -177,7 +177,7 @@ pub fn profiles() -> Vec<ProviderProfile> {
             targets: vec![
                 region(CHAT, "https://proxyless-api.privatemode.ai/v1", "proxyless"),
                 region(ANTH, "https://proxyless-api.privatemode.ai", "proxyless"),
-                region(CHAT, "http://localhost:8080/v1", "local-proxy"),
+                region(CHAT, "{endpoint}/v1", "local-proxy"),
             ],
             catalogue: Some("privatemode-ai"),
         },
@@ -1303,7 +1303,7 @@ pub fn profiles() -> Vec<ProviderProfile> {
             name: "Atomic Chat",
             aliases: &["atomicchat"],
             auth: vec![AuthSpec::None, AuthSpec::ApiKey],
-            targets: vec![target(CHAT, "http://127.0.0.1:1337/v1")],
+            targets: vec![target(CHAT, "{endpoint}/v1")],
             catalogue: Some("atomic-chat"),
         },
     ]

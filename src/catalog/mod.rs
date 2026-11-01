@@ -76,7 +76,7 @@ impl ServiceDef {
     ) -> Result<ServiceTarget, Error> {
         let mut resolved = self.base_url.to_owned();
         for (key, value) in vars {
-            check_endpoint_var(provider, key, value)?;
+            check_endpoint_var(provider, key, value, self.base_url)?;
             resolved = resolved.replace(&format!("{{{key}}}"), value);
         }
         if let Some(start) = resolved.find('{') {
@@ -88,15 +88,25 @@ impl ServiceDef {
                 )));
             }
         }
-        // The post-substitution checks exist to keep a host-supplied value
-        // inside the declared endpoint — they only apply when the template
-        // actually carried placeholders. A literal base URL (a local
-        // `http://` provider) follows the plain parse path.
-        if self.base_url.contains('{') {
-            self.materialize_checked(provider, &resolved)
-        } else {
-            self.materialize(provider, &resolved)
+        if !self.base_url.contains('{') {
+            return self.materialize(provider, &resolved);
         }
+        if self.base_url.starts_with('{') {
+            // A leading variable carries the URL itself: the caller chose
+            // the endpoint, so there is no declared host to anchor and no
+            // https mandate — the scheme just has to stay http(s).
+            let url = url::Url::parse(&resolved).map_err(|e| {
+                Error::Protocol(format!("profile {} endpoint {e}", provider.as_str()))
+            })?;
+            if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+                return Err(Error::Protocol(format!(
+                    "profile {} endpoint must resolve to an http(s) URL",
+                    provider.as_str()
+                )));
+            }
+            return self.build_target(provider, url);
+        }
+        self.materialize_checked(provider, &resolved)
     }
 
     /// [`Self::materialize`] plus the template-materialization post
@@ -154,10 +164,36 @@ impl ServiceDef {
     }
 }
 
-/// One endpoint variable must stay a single URL atom: any authority or
-/// path-structure character would let a host-supplied value redirect the
-/// endpoint, and `..` lets a path variable walk out of it.
-fn check_endpoint_var(provider: &ProviderId, key: &str, value: &str) -> Result<(), Error> {
+/// One endpoint variable's value class comes from its position in the
+/// template. A leading `{name}` carries the endpoint URL itself (local
+/// servers and host-managed gateways declare nothing else): the value
+/// must be a complete http(s) URL with a host and no embedded
+/// credentials. Any other variable is a single URL atom — an authority
+/// or path-structure character would let a host-supplied value redirect
+/// the endpoint, and `..` lets a path variable walk out of it.
+fn check_endpoint_var(
+    provider: &ProviderId,
+    key: &str,
+    value: &str,
+    template: &str,
+) -> Result<(), Error> {
+    if template.starts_with(&format!("{{{key}}}")) {
+        let clean = url::Url::parse(value)
+            .map(|url| {
+                matches!(url.scheme(), "http" | "https")
+                    && url.host_str().is_some()
+                    && url.username().is_empty()
+                    && url.password().is_none()
+            })
+            .unwrap_or(false);
+        if !clean {
+            return Err(Error::Protocol(format!(
+                "profile {} endpoint variable {{{key}}} must be an http(s) URL without credentials",
+                provider.as_str()
+            )));
+        }
+        return Ok(());
+    }
     let bad = value.is_empty()
         || value.contains("..")
         || value.bytes().any(|b| {

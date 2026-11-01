@@ -5,8 +5,9 @@
 //!   cargo run --release --example live_local
 //!
 //! Covers the two surfaces a stock `ollama serve` exposes: the Ollama
-//! native protocol on :11434 and the OpenAI-compatible surface on
-//! :11434/v1. No credentials, no proxy, no external cost.
+//! native protocol and the OpenAI-compatible surface under `/v1`, both
+//! reached through the runtime-supplied `A4MP_LIVE_ENDPOINT`. No
+//! credentials, no proxy, no external cost.
 
 use std::sync::Arc;
 
@@ -103,17 +104,17 @@ async fn run_stream(adapter: &dyn Adapter, label: &str, model: &str) {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let host = std::env::var("A4MP_LIVE_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+    let endpoint = std::env::var("A4MP_LIVE_ENDPOINT").unwrap_or_else(|_| {
+        eprintln!("A4MP_LIVE_ENDPOINT is required (the ollama server's base URL)");
+        std::process::exit(2);
+    });
     let transport = Arc::new(ReqwestTransport::new());
     let resolver = Arc::new(NoCredentials);
     let model = "gemma4:e4b";
 
-    // 1. Ollama native protocol on :11434
+    // 1. Ollama native protocol on the supplied endpoint
     let ol = OllamaAdapter::new(
-        target(
-            Protocol::Other("ollama".into()),
-            format!("http://{host}:11434"),
-        ),
+        target(Protocol::Other("ollama".into()), endpoint.clone()),
         AuthKind::None,
         transport.clone(),
         resolver.clone(),
@@ -126,12 +127,9 @@ async fn main() {
         Err(e) => println!("[ollama] models FAIL   {e}"),
     }
 
-    // 2. OpenAI-compatible surface on :11434/v1
+    // 2. OpenAI-compatible surface on the same endpoint's /v1
     let oa = OpenAiAdapter::new(
-        target(
-            Protocol::OpenAiChatCompletions,
-            format!("http://{host}:11434/v1"),
-        ),
+        target(Protocol::OpenAiChatCompletions, format!("{endpoint}/v1")),
         AuthKind::None,
         transport.clone(),
         resolver.clone(),

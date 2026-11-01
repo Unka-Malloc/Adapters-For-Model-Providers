@@ -475,10 +475,7 @@ pub fn profiles() -> Vec<ProviderProfile> {
             name: "oMLX",
             aliases: &[],
             auth: vec![AuthSpec::None],
-            targets: vec![
-                target(CHAT, "http://localhost:8000/v1"),
-                target(RESP, "http://localhost:8000/v1"),
-            ],
+            targets: vec![target(CHAT, "{endpoint}/v1"), target(RESP, "{endpoint}/v1")],
             catalogue: Some("omlx"),
         },
         ProviderProfile {
@@ -486,10 +483,7 @@ pub fn profiles() -> Vec<ProviderProfile> {
             name: "MLX-Serve",
             aliases: &[],
             auth: vec![AuthSpec::None],
-            targets: vec![
-                target(CHAT, "http://localhost:11234/v1"),
-                target(RESP, "http://localhost:11234/v1"),
-            ],
+            targets: vec![target(CHAT, "{endpoint}/v1"), target(RESP, "{endpoint}/v1")],
             catalogue: Some("mlx-serve"),
         },
         // --- Agent / IDE subscription paths --------------------------------
