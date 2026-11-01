@@ -485,9 +485,16 @@ pub fn provider_error(status: Option<u16>, body: &Value) -> Error {
 /// the embedded `error.code`. In particular, a 429-shaped body that
 /// arrives mid-stream must not be classified as a free pre-dispatch
 /// rejection merely because its code is 4xx.
+///
+/// `status` is forced to `None`: the envelope `code` is the provider's
+/// own domain code, not an HTTP status, and a host that keys retries off
+/// `status` must never see a billable 2xx as `429`. The envelope value
+/// stays inspectable in `code` and `raw`; `retry_safety()` remains the
+/// authoritative signal.
 pub fn upstream_error(body: &Value) -> Error {
     let mut err = provider_error(None, body);
-    if let Error::Provider { retry, .. } = &mut err {
+    if let Error::Provider { status, retry, .. } = &mut err {
+        *status = None;
         *retry = RetrySafety::Unsafe;
     }
     err

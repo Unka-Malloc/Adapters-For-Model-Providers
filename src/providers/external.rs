@@ -21,7 +21,6 @@
 //! (the ACP/Copilot-CLI family). One process serves one operation.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -631,7 +630,7 @@ fn encode_tool_choice(choice: &ToolChoice) -> Value {
         ToolChoice::None => "none".into(),
         ToolChoice::Required => "required".into(),
         ToolChoice::Named(n) => json!({"type": "named", "name": n}),
-        other => return json!({ "unsupported": format!("{other:?}") }),
+        other => json!({ "unsupported": format!("{other:?}") }),
     }
 }
 

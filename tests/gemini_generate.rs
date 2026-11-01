@@ -496,7 +496,9 @@ async fn chat_error_envelope_after_2xx_is_unsafe_to_retry() {
             retry,
             ..
         }) => {
-            assert_eq!(status, Some(429));
+            // The envelope `code` is a provider domain code, not an HTTP
+            // status: a billable 2xx must not surface as `Some(429)`.
+            assert_eq!(status, None);
             assert_eq!(code.as_deref(), Some("RESOURCE_EXHAUSTED"));
             assert_eq!(retry, RetrySafety::Unsafe);
         }
@@ -552,7 +554,7 @@ async fn stream_error_frame_after_2xx_is_unsafe_to_retry() {
             retry,
             ..
         }) => {
-            assert_eq!(status, Some(429));
+            assert_eq!(status, None);
             assert_eq!(code.as_deref(), Some("RESOURCE_EXHAUSTED"));
             assert_eq!(retry, RetrySafety::Unsafe);
         }

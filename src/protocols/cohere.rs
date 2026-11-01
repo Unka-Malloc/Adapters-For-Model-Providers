@@ -256,10 +256,8 @@ pub fn decode_response(body: &[u8]) -> Result<Output, Error> {
                 parts.push(decode_content_block(block));
             }
         }
-        Value::String(text) => {
-            if !text.is_empty() {
-                parts.push(ContentPart::Text { text: text.clone() });
-            }
+        Value::String(text) if !text.is_empty() => {
+            parts.push(ContentPart::Text { text: text.clone() });
         }
         _ => {}
     }
@@ -707,7 +705,7 @@ impl crate::transport::SseEventDecoder for ChatStreamDecoder {
         }
         let ty = v["type"]
             .as_str()
-            .or_else(|| event.event.as_deref())
+            .or(event.event.as_deref())
             .unwrap_or_default();
         let wire = v["index"].as_u64().unwrap_or(u64::MAX);
         let delta = &v["delta"]["message"];

@@ -299,9 +299,16 @@ fn decode_part(
             let source = if let Some(id) = file.get("file_id").and_then(Value::as_str) {
                 MediaSource::Resource(id.to_owned())
             } else if let Some(data) = file.get("file_data").and_then(Value::as_str) {
-                MediaSource::Inline {
-                    media_type: "application/octet-stream".into(),
-                    data: base64_decode(data, path)?,
+                // `file_data` is a `data:` URI on the wire (the outbound
+                // codec writes it that way); a bare base64 payload still
+                // decodes as octet-stream bytes.
+                if data.starts_with("data:") {
+                    parse_media_source(path, data)?
+                } else {
+                    MediaSource::Inline {
+                        media_type: "application/octet-stream".into(),
+                        data: base64_decode(data, path)?,
+                    }
                 }
             } else {
                 loss(report, LossKind::Unsupported, path.to_owned());
@@ -310,7 +317,10 @@ fn decode_part(
             Ok(Some(ContentPart::Media {
                 kind: MediaKind::File,
                 source,
-                detail: None,
+                detail: file
+                    .get("filename")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
             }))
         }
         Some(other) => {

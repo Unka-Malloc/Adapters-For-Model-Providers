@@ -96,7 +96,8 @@ fn decodes_media_parts_and_reasoning() {
                 {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGk=", "detail": "high"}},
                 {"type": "image_url", "image_url": {"url": "https://img.test/pic.png"}},
                 {"type": "input_audio", "input_audio": {"data": "aGk=", "format": "mp3"}},
-                {"type": "file", "file": {"file_id": "file-9"}}
+                {"type": "file", "file": {"file_id": "file-9"}},
+                {"type": "file", "file": {"file_data": "data:application/pdf;base64,aGk=", "filename": "a.pdf"}}
             ]},
             {"role": "assistant", "content": null, "reasoning_content": "ponder"}
         ]
@@ -109,7 +110,7 @@ fn decodes_media_parts_and_reasoning() {
     );
 
     let parts = &req.messages[0].content;
-    assert_eq!(parts.len(), 5);
+    assert_eq!(parts.len(), 6);
     match &parts[1] {
         ContentPart::Media {
             kind,
@@ -157,6 +158,21 @@ fn decodes_media_parts_and_reasoning() {
             assert_eq!(id, "file-9");
         }
         other => panic!("expected file resource, got {other:?}"),
+    }
+    // `file_data` decodes symmetric to the outbound encoder: data-URI
+    // media type + bytes, `filename` as the part detail.
+    match &parts[5] {
+        ContentPart::Media {
+            kind,
+            source: MediaSource::Inline { media_type, data },
+            detail,
+        } => {
+            assert_eq!(*kind, MediaKind::File);
+            assert_eq!(media_type, "application/pdf");
+            assert_eq!(&data[..], b"hi");
+            assert_eq!(detail.as_deref(), Some("a.pdf"));
+        }
+        other => panic!("expected inline file, got {other:?}"),
     }
     match &req.messages[1].content[0] {
         ContentPart::Reasoning(rb) => {

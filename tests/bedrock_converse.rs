@@ -654,6 +654,33 @@ async fn chat_stream_unknown_event_is_native_and_truncation_errors() {
     assert!(matches!(err, Error::UpstreamProtocol(_)));
 }
 
+#[tokio::test]
+async fn chat_stream_rejects_oversized_frame_before_buffering() {
+    // A prelude declaring a 16 MiB frame is cut off on its declared
+    // length alone — before the decoder waits for or buffers the body.
+    // total_len and headers_len are both ASCII byte values here.
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(16 * 1024 * 1024u32).to_be_bytes()); // total_len
+    bytes.extend_from_slice(&0u32.to_be_bytes()); // headers_len
+    bytes.extend_from_slice(&0u32.to_be_bytes()); // prelude crc (never reached)
+    bytes.extend_from_slice(b"still-not-sixteen-megabytes");
+    let s = leak_ascii(bytes);
+    let t = MockTransport::new();
+    t.push(Response::Sse(vec![s]));
+    let err = collect(
+        adapter(t)
+            .chat_stream(ChatRequest::default(), &RequestControl::default())
+            .await
+            .unwrap(),
+    )
+    .await
+    .unwrap_err();
+    match err {
+        Error::UpstreamProtocol(m) => assert!(m.contains("cap"), "{m}"),
+        other => panic!("expected UpstreamProtocol, got {other:?}"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Errors, auth and endpoints
 // ---------------------------------------------------------------------------

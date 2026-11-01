@@ -1,6 +1,10 @@
 //! Shared test fixtures: an in-memory transport that replays recorded
 //! responses and captures requests for assertions.
 
+// Each test binary includes this module and uses its own subset of the
+// helpers; items unused by one binary are exercised by another.
+#![allow(dead_code)]
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 

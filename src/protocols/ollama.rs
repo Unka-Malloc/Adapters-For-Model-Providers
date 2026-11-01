@@ -721,6 +721,20 @@ impl NdjsonEventDecoder for ChatStreamDecoder {
             }
         }
         if v["done"].as_bool() == Some(true) {
+            // Close every open part first: consumers finalize per-part
+            // state on PartFinished, so a bare Finished must not leak
+            // them.
+            let mut open: Vec<u32> = self
+                .thinking_part
+                .take()
+                .into_iter()
+                .chain(self.text_part.take())
+                .chain(self.tool_parts.drain().map(|(_, i)| i))
+                .collect();
+            open.sort_unstable();
+            for index in open {
+                out.push(StreamEvent::PartFinished { index });
+            }
             let usage = usage_from(&v);
             if usage.input_tokens.is_some()
                 || usage.output_tokens.is_some()

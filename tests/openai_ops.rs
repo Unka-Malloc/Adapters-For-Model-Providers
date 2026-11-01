@@ -3,7 +3,6 @@
 //! transcription) and batch jobs. Payloads are hand-authored from the
 //! wire contract, not copied from reference projects.
 
-#[allow(dead_code)]
 mod common;
 
 use std::sync::Arc;
@@ -688,6 +687,67 @@ async fn cancel_job_posts_cancel_endpoint() {
     let req = &t.recorded()[0];
     assert_eq!(req.method, http::Method::POST);
     assert_eq!(req.url.path(), "/v1/batches/batch_7/cancel");
+}
+
+#[tokio::test]
+async fn job_handles_bound_elsewhere_are_rejected() {
+    // A handle must be minted by this adapter's provider+protocol — a
+    // replayed or cross-tenant handle never builds a request path.
+    let t = MockTransport::new();
+    let a = adapter(t.clone());
+    for bad in [
+        JobHandle {
+            provider: ProviderId::new("other-tenant"),
+            protocol: Protocol::OpenAiChatCompletions,
+            id: "batch_1".into(),
+            state: json!({}),
+        },
+        JobHandle {
+            provider: ProviderId::new("test-vendor"),
+            protocol: Protocol::AnthropicMessages,
+            id: "batch_1".into(),
+            state: json!({}),
+        },
+    ] {
+        match a.job_state(&bad, &RequestControl::default()).await {
+            Err(Error::Protocol(_)) => {}
+            other => panic!("expected Protocol error, got {other:?}"),
+        }
+        match a.cancel_job(&bad, &RequestControl::default()).await {
+            Err(Error::Protocol(_)) => {}
+            other => panic!("expected Protocol error, got {other:?}"),
+        }
+    }
+    assert!(t.recorded().is_empty(), "no request may be dispatched");
+}
+
+#[tokio::test]
+async fn job_ids_with_path_metacharacters_are_rejected() {
+    // A forged id must not escape the /batches/ namespace or reach a
+    // sibling endpoint (`files/…`, `cancel`, …).
+    let t = MockTransport::new();
+    let a = adapter(t.clone());
+    for id in [
+        "batch_1/../../files",
+        "../models",
+        "batch_1%2fcancel",
+        "batch_1/cancel",
+        "batch 1",
+        "batch_1?x=1",
+        "..",
+        "",
+    ] {
+        let h = handle(id);
+        match a.job_state(&h, &RequestControl::default()).await {
+            Err(Error::Protocol(_)) => {}
+            other => panic!("id {id:?} must fail closed, got {other:?}"),
+        }
+        match a.cancel_job(&h, &RequestControl::default()).await {
+            Err(Error::Protocol(_)) => {}
+            other => panic!("id {id:?} must fail closed, got {other:?}"),
+        }
+    }
+    assert!(t.recorded().is_empty(), "no request may be dispatched");
 }
 
 #[tokio::test]

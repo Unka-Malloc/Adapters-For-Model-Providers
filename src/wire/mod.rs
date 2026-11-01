@@ -164,12 +164,18 @@ impl WireBridge {
     /// Streaming chat: returns a stream of dialect-shaped SSE frames.
     /// Preamble frames emit first; canonical events pass through the
     /// dialect encoder; `finish` frames terminate the stream.
+    ///
+    /// Conversion losses are observable on the returned stream's
+    /// [`BridgeEventStream::report`] / [`BridgeEventStream::drain_losses`]:
+    /// request-decode losses are already accumulated when the stream is
+    /// returned, and frame-time encode losses join them as events flow —
+    /// the same fidelity guarantee `chat` gives its report.
     pub async fn chat_stream(
         &self,
         body: &[u8],
         ctrl: &RequestControl,
-    ) -> Result<DynStream<'static, SseEvent>, Error> {
-        let (request, _report) = decode_chat_request(self.dialect, body)?;
+    ) -> Result<BridgeEventStream, Error> {
+        let (request, report) = decode_chat_request(self.dialect, body)?;
         let model = request.model.clone();
         let inner = self.adapter.chat_stream(request, ctrl).await?;
         // One encoder owns both the preamble and the rest of the stream.
@@ -177,26 +183,50 @@ impl WireBridge {
         // two instances would announce one id and complete another.
         let mut encoder = stream_encoder(self.dialect, &model);
         let pending = encoder.preamble().into();
-        Ok(Box::pin(BridgeStream {
+        Ok(BridgeEventStream {
             pending,
             encoder,
             inner,
+            report,
             finished: false,
-        }))
+        })
     }
 }
 
 /// The stream behind [`WireBridge::chat_stream`]: drains pending frames
 /// first, then translates canonical events through the dialect encoder,
 /// and emits terminator frames once the inner stream ends.
-struct BridgeStream {
+///
+/// Conversion losses — the request-decode report plus every loss the
+/// dialect encoder observes — accumulate into [`Self::report`]; drain
+/// them before or after `finish()`. Dropping the stream without draining
+/// drops the report too: nothing here silently discards a loss, it is
+/// the caller's responsibility to look.
+pub struct BridgeEventStream {
     pending: std::collections::VecDeque<SseEvent>,
     encoder: Box<dyn StreamEncoder>,
     inner: DynStream<'static, StreamEvent>,
+    report: ConversionReport,
     finished: bool,
 }
 
-impl futures_core::Stream for BridgeStream {
+impl BridgeEventStream {
+    /// The merged conversion report so far: request-decode losses plus
+    /// every loss the dialect encoder has already reported (encode losses
+    /// run canonical→dialect and are appended to the decode report, the
+    /// same merge [`WireBridge::chat`] performs).
+    pub fn report(&self) -> &ConversionReport {
+        &self.report
+    }
+
+    /// Every loss accumulated since the last drain — decode losses the
+    /// first time, encode losses thereafter.
+    pub fn drain_losses(&mut self) -> Vec<ConversionLoss> {
+        std::mem::take(&mut self.report.losses)
+    }
+}
+
+impl futures_core::Stream for BridgeEventStream {
     type Item = Result<SseEvent, Error>;
 
     fn poll_next(
@@ -215,6 +245,8 @@ impl futures_core::Stream for BridgeStream {
                 std::task::Poll::Ready(None) => {
                     self.finished = true;
                     let frames = self.encoder.finish();
+                    let losses = self.encoder.drain_losses();
+                    self.report.losses.extend(losses);
                     self.pending.extend(frames);
                 }
                 std::task::Poll::Ready(Some(Err(e))) => {
@@ -223,6 +255,8 @@ impl futures_core::Stream for BridgeStream {
                 }
                 std::task::Poll::Ready(Some(Ok(ev))) => {
                     let frames = self.encoder.encode(&ev);
+                    let losses = self.encoder.drain_losses();
+                    self.report.losses.extend(losses);
                     self.pending.extend(frames);
                 }
             }

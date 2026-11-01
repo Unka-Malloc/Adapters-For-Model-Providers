@@ -117,6 +117,86 @@ async fn chat_request_maps_messages_tools_sampling_and_extensions() {
 }
 
 #[tokio::test]
+async fn chat_request_encodes_inline_file_as_file_data() {
+    let t = MockTransport::new();
+    t.push(Response::Json(
+        200,
+        json!({"choices": [{"message": {"role":"assistant","content":""}, "finish_reason":"stop"}]}),
+    ));
+    let a = adapter(t.clone());
+
+    let mut req = ChatRequest {
+        model: "m".into(),
+        ..Default::default()
+    };
+    req.messages.push(Message {
+        role: Role::User,
+        content: vec![
+            ContentPart::Media {
+                kind: MediaKind::File,
+                source: MediaSource::Inline {
+                    media_type: "application/pdf".into(),
+                    data: bytes::Bytes::from_static(b"hi"),
+                },
+                detail: Some("brief.pdf".into()),
+            },
+            ContentPart::Media {
+                kind: MediaKind::File,
+                source: MediaSource::Inline {
+                    media_type: "text/csv".into(),
+                    data: bytes::Bytes::from_static(b"a,b"),
+                },
+                detail: None,
+            },
+        ],
+    });
+    a.chat(req, &RequestControl::default()).await.unwrap();
+
+    let b = body_json(&t.recorded()[0]);
+    // Inline bytes become `file_data`; `file_id` stays reserved for
+    // provider file ids, which no canonical source can mint.
+    assert_eq!(
+        b["messages"][0]["content"][0]["file"],
+        json!({"file_data": "data:application/pdf;base64,aGk=", "filename": "brief.pdf"})
+    );
+    assert_eq!(
+        b["messages"][0]["content"][1]["file"],
+        json!({"file_data": "data:text/csv;base64,YSxi", "filename": "file.csv"})
+    );
+    assert!(
+        b["messages"][0]["content"][0]["file"]
+            .get("file_id")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn chat_request_rejects_unresolvable_file_sources() {
+    let t = MockTransport::new();
+    let a = adapter(t.clone());
+    for source in [
+        MediaSource::Url("https://x.test/a.pdf".into()),
+        MediaSource::Resource("file-unresolved".into()),
+    ] {
+        let mut req = ChatRequest {
+            model: "m".into(),
+            ..Default::default()
+        };
+        req.messages.push(Message {
+            role: Role::User,
+            content: vec![ContentPart::Media {
+                kind: MediaKind::File,
+                source,
+                detail: None,
+            }],
+        });
+        let err = a.chat(req, &RequestControl::default()).await.unwrap_err();
+        assert!(matches!(err, Error::Unsupported(_)), "{err:?}");
+    }
+    assert!(t.recorded().is_empty(), "no request may be dispatched");
+}
+
+#[tokio::test]
 async fn chat_response_preserves_reasoning_and_tool_calls() {
     let t = MockTransport::new();
     t.push(Response::Json(
@@ -186,11 +266,13 @@ async fn chat_stream_decodes_reasoning_text_toolcalls_and_usage() {
     let mut text = String::new();
     let mut args = String::new();
     let mut started = Vec::new();
+    let mut ended = Vec::new();
     let mut usage = false;
     let mut finish = false;
     for e in &events {
         match e {
             StreamEvent::PartStarted { kind, .. } => started.push(*kind),
+            StreamEvent::PartFinished { index } => ended.push(*index),
             StreamEvent::ReasoningDelta { text: d, .. } => reasoning.push_str(d),
             StreamEvent::TextDelta { text: d, .. } => text.push_str(d),
             StreamEvent::ToolCallStarted { id, name, .. } => {
@@ -207,6 +289,9 @@ async fn chat_stream_decodes_reasoning_text_toolcalls_and_usage() {
     assert_eq!(reasoning, "step one");
     assert_eq!(text, "Hello");
     assert_eq!(args, "{\"q\":\"x\"}");
+    // Every open part — reasoning, text and the tool call — is closed
+    // before Finished; per-part consumers must not leak state.
+    assert_eq!(ended, [0, 1, 2]);
     assert!(usage);
     assert!(finish);
 }
@@ -263,17 +348,37 @@ async fn chat_completions_rejects_foreign_reasoning_replay() {
 fn sse_decoder_handles_crlf_and_split_frames() {
     let mut dec = SseDecoder::new();
     // CRLF frame boundary followed by a partial frame in one chunk.
-    let ev = dec.feed(b"data: a\r\n\r\nda").pop().unwrap();
+    let ev = dec.feed(b"data: a\r\n\r\nda").unwrap().pop().unwrap();
     assert_eq!(ev.data, "a");
-    let ev = dec.feed(b"ta: b\n\n").pop().unwrap();
+    let ev = dec.feed(b"ta: b\n\n").unwrap().pop().unwrap();
     assert_eq!(ev.data, "b");
     // Comment/heartbeat frames produce nothing.
-    assert!(dec.feed(b": keep-alive\n\n").is_empty());
+    assert!(dec.feed(b": keep-alive\n\n").unwrap().is_empty());
     // Multi-line data joins with newline.
-    let ev = dec.feed(b"data: x\ndata: y\n\n").pop().unwrap();
+    let ev = dec.feed(b"data: x\ndata: y\n\n").unwrap().pop().unwrap();
     assert_eq!(ev.data, "x\ny");
     // A trailing unterminated frame flushes on finish.
-    assert!(dec.feed(b"data: tail").is_empty());
+    assert!(dec.feed(b"data: tail").unwrap().is_empty());
     let ev = dec.finish().pop().unwrap();
     assert_eq!(ev.data, "tail");
+}
+
+#[test]
+fn sse_decoder_bounds_frame_memory_and_resumes_scan() {
+    let mut dec = SseDecoder::new();
+    // An unterminated blob past the 8 MiB cap is a broken peer, not
+    // more buffering.
+    let big = vec![b'x'; 9 * 1024 * 1024];
+    match dec.feed(&big) {
+        Err(Error::Protocol(m)) => assert!(m.contains("cap"), "{m}"),
+        other => panic!("expected Protocol error, got {other:?}"),
+    }
+
+    // A separator split across three feeds still frames correctly; the
+    // scan cursor backs up to the incomplete `\n` lookahead.
+    let mut dec = SseDecoder::new();
+    assert!(dec.feed(b"data: a\r\n\r").unwrap().is_empty());
+    assert_eq!(dec.feed(b"\ndata: b\n").unwrap().pop().unwrap().data, "a");
+    assert_eq!(dec.feed(b"\n").unwrap().pop().unwrap().data, "b");
+    assert_eq!(dec.feed(b"data: c\n\n").unwrap().pop().unwrap().data, "c");
 }

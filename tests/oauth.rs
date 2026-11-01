@@ -20,6 +20,7 @@ fn client() -> OAuthClient {
         scope: Some("models".into()),
         authorize_extra: vec![],
         token_extra: vec![],
+        endpoint_headers: http::HeaderMap::new(),
     }
 }
 
@@ -180,6 +181,46 @@ async fn device_access_denied_is_credential_error() {
         Err(Error::Credential(_)) => {}
         Err(other) => panic!("expected Credential error, got {other:?}"),
         Ok(_) => panic!("expected Credential error, got token"),
+    }
+}
+
+#[tokio::test]
+async fn endpoint_headers_reach_device_and_token_posts() {
+    // GitHub-style content negotiation: the client's declared headers
+    // ride every endpoint post, not only the token call.
+    let transport = MockTransport::new();
+    transport
+        .push(Response::Json(
+            200,
+            serde_json::json!({
+                "device_code": common::run_token("device-code"), "user_code": common::run_token("user-code"),
+                "verification_uri": "https://a.example/v", "expires_in": 60, "interval": 0
+            }),
+        ))
+        .push(Response::Json(
+            200,
+            serde_json::json!({"access_token": common::run_token("access"), "token_type": "Bearer"}),
+        ));
+    let effects = StubEffects::default();
+    let mut client = client();
+    client.endpoint_headers.insert(
+        http::header::ACCEPT,
+        http::HeaderValue::from_static("application/json"),
+    );
+    oauth::device_flow(&client, &transport, &effects, &ctrl())
+        .await
+        .unwrap();
+    let recorded = transport.recorded();
+    assert_eq!(recorded.len(), 2);
+    for req in &recorded {
+        assert_eq!(
+            req.headers.get(http::header::ACCEPT).unwrap(),
+            "application/json"
+        );
+        assert_eq!(
+            req.headers.get(http::header::CONTENT_TYPE).unwrap(),
+            "application/x-www-form-urlencoded"
+        );
     }
 }
 

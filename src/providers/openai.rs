@@ -217,6 +217,20 @@ impl OpenAiAdapter {
         }
         Ok(res)
     }
+
+    /// A handle this adapter serves must have been minted here (provider
+    /// + protocol binding) and an OpenAI batch id is one safe path atom
+    ///   — anything else is a forged or misplaced handle, never a lookup.
+    fn check_job_handle(&self, handle: &JobHandle) -> Result<(), Error> {
+        handle.check_binding(&self.target.provider, &self.target.protocol)?;
+        if handle.id.contains('/') {
+            return Err(Error::Protocol(format!(
+                "OpenAI batch id is a single path segment, got {:?}",
+                handle.id
+            )));
+        }
+        handle.check_path_id()
+    }
 }
 
 #[async_trait::async_trait]
@@ -498,6 +512,7 @@ impl Adapter for OpenAiAdapter {
         handle: &JobHandle,
         ctrl: &RequestControl,
     ) -> Result<JobState, Error> {
+        self.check_job_handle(handle)?;
         let headers = self.authenticate().await?;
         let mut http = HttpRequest::get(self.target.endpoint(&format!("batches/{}", handle.id)));
         for (k, v) in headers.iter() {
@@ -548,6 +563,7 @@ impl Adapter for OpenAiAdapter {
 
     /// `POST /batches/{id}/cancel`.
     async fn cancel_job(&self, handle: &JobHandle, ctrl: &RequestControl) -> Result<(), Error> {
+        self.check_job_handle(handle)?;
         let headers = self.authenticate().await?;
         let mut http = HttpRequest::post_json(
             self.target

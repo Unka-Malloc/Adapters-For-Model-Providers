@@ -544,6 +544,13 @@ pub enum StreamEvent {
 
 /// Credential-free, resumable handle for an accepted asynchronous job.
 /// Carrying it across processes or restarts resubmits nothing.
+///
+/// A `JobHandle` is a bearer reference to provider-side work: whoever
+/// presents it can poll or cancel that job. Adapters verify the handle
+/// was minted for their own provider/protocol and that `id` is path-safe
+/// before use, but job *ownership* stays a host concern — the host
+/// authorizes that the caller presenting a stored handle is entitled to
+/// the job it names.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct JobHandle {
     pub provider: ProviderId,
@@ -553,6 +560,50 @@ pub struct JobHandle {
     /// Opaque provider resume token; never contains credentials.
     #[serde(default)]
     pub state: serde_json::Value,
+}
+
+impl JobHandle {
+    /// Assert this handle was minted by `provider`/`protocol` — the
+    /// adapter about to serve it. A handle replayed against a different
+    /// adapter (cross-provider, cross-protocol, or a stale catalog
+    /// binding) fails closed instead of driving the wrong endpoint.
+    pub fn check_binding(&self, provider: &ProviderId, protocol: &Protocol) -> Result<(), Error> {
+        if self.provider != *provider {
+            return Err(Error::Protocol(format!(
+                "job handle bound to provider {}, not {}",
+                self.provider, provider
+            )));
+        }
+        if self.protocol != *protocol {
+            return Err(Error::Protocol(format!(
+                "job handle bound to protocol {:?}, not {protocol:?}",
+                self.protocol
+            )));
+        }
+        Ok(())
+    }
+
+    /// Assert every `/`-separated segment of `id` is a non-empty path
+    /// atom: no `.`/`..` segments and none of `% \ ? # @ :` or
+    /// whitespace. The id lands inside request paths, so this keeps a
+    /// forged handle inside the provider's own job namespace.
+    pub fn check_path_id(&self) -> Result<(), Error> {
+        let bad = self.id.split('/').any(|seg| {
+            seg.is_empty()
+                || seg == "."
+                || seg == ".."
+                || seg.bytes().any(|b| {
+                    matches!(b, b'%' | b'\\' | b'?' | b'#' | b'@' | b':') || b.is_ascii_whitespace()
+                })
+        });
+        if bad || self.id.is_empty() {
+            return Err(Error::Protocol(format!(
+                "job id is not a safe path ({:?})",
+                self.id
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// Operation payload submitted as an asynchronous job.

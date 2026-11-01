@@ -11,7 +11,6 @@
 // Shared fixtures: only `MockTransport` is used (the external lane makes
 // no HTTP calls; the transport slot is parity); other helpers stay
 // available to sibling suites.
-#[allow(dead_code)]
 mod common;
 
 use std::collections::VecDeque;

@@ -179,6 +179,14 @@ impl GeminiAdapter {
         Ok(res)
     }
 
+    /// A handle this adapter serves must have been minted here (provider
+    /// + protocol binding); the operation name inside is additionally
+    ///   path-checked before it reaches [`Self::operation_url`].
+    fn check_job_handle(&self, handle: &JobHandle) -> Result<(), Error> {
+        handle.check_binding(&self.target.provider, &self.target.protocol)?;
+        handle.check_path_id()
+    }
+
     /// `v1beta/{operation}[suffix]` — each `/`-separated segment of the
     /// provider's opaque operation name is percent-encoded as a path
     /// segment; `suffix` (e.g. `:cancel`) is appended after the last one.
@@ -298,6 +306,7 @@ impl Adapter for GeminiAdapter {
         handle: &JobHandle,
         ctrl: &RequestControl,
     ) -> Result<JobState, Error> {
+        self.check_job_handle(handle)?;
         let headers = self.authenticate().await?;
         let mut http = HttpRequest::get(self.operation_url(&handle.id, ""));
         for (k, v) in headers.iter() {
@@ -310,6 +319,7 @@ impl Adapter for GeminiAdapter {
     /// `POST v1beta/{operation}:cancel` — the Veo LRO surface supports
     /// the cancel verb.
     async fn cancel_job(&self, handle: &JobHandle, ctrl: &RequestControl) -> Result<(), Error> {
+        self.check_job_handle(handle)?;
         let headers = self.authenticate().await?;
         let mut http = HttpRequest::post_json(
             self.operation_url(&handle.id, ":cancel"),

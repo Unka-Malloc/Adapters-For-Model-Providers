@@ -5,27 +5,13 @@
 //! Signing material is minted per run: no credential-shaped value is
 //! written into this file, and every expected signature is derived from
 //! the run's material by the reference HMAC chain below.
-//!
-//! The module under test is included through `#[path]` so this file works
-//! before `pub mod sigv4` is registered in `src/lib.rs`: the `crate::`
-//! paths inside the included file resolve through the `a4mp` root imports
-//! below. Once lib.rs exports the module, the local `mod sigv4` shadows
-//! the name and this test keeps passing unchanged.
 
 use std::time::{Duration, SystemTime};
 
-// Root bindings: `crate::api` / `crate::auth` / `crate::transport` inside
-// the `#[path]`-included file resolve to these.
+use a4mp::sigv4::{SigV4, is_cloud};
 use a4mp::{Credential, Error, HttpRequest, Protocol, Secret, ServiceTarget};
-use a4mp::{api, auth, transport};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
-
-use sigv4::{SigV4, is_cloud};
-
-#[allow(dead_code)]
-#[path = "../src/sigv4.rs"]
-mod sigv4;
 
 mod common;
 

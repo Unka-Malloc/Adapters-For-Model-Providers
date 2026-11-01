@@ -37,6 +37,10 @@ pub struct OAuthClient {
     pub authorize_extra: Vec<(String, String)>,
     /// Provider-required extra parameters on token requests.
     pub token_extra: Vec<(String, String)>,
+    /// Provider-required extra headers on device/token endpoint posts —
+    /// content-negotiation headers such as GitHub's `Accept:
+    /// application/json`, without which the endpoint answers form-encoded.
+    pub endpoint_headers: http::HeaderMap,
 }
 
 /// An issued OAuth token set; the raw response is preserved for
@@ -159,6 +163,7 @@ fn form_body(pairs: &[(String, String)]) -> bytes::Bytes {
 async fn post_form(
     url: &url::Url,
     pairs: &[(String, String)],
+    headers: &http::HeaderMap,
     transport: &dyn Transport,
     ctrl: &RequestControl,
 ) -> Result<Value, Error> {
@@ -167,6 +172,9 @@ async fn post_form(
         http::header::CONTENT_TYPE,
         http::HeaderValue::from_static("application/x-www-form-urlencoded"),
     );
+    for (k, v) in headers {
+        req.headers.insert(k.clone(), v.clone());
+    }
     req.body = form_body(pairs);
     let res = transport.send(req, ctrl).await?;
     let body: Value = serde_json::from_slice(&res.body)
@@ -249,7 +257,7 @@ pub async fn device_authorize(
         pairs.push(("scope".into(), scope.clone()));
     }
     pairs.extend(client.authorize_extra.iter().cloned());
-    let body = post_form(&url, &pairs, transport, ctrl).await?;
+    let body = post_form(&url, &pairs, &client.endpoint_headers, transport, ctrl).await?;
     if let Some(e) = oauth_error(&body) {
         return Err(e);
     }
@@ -322,7 +330,14 @@ pub async fn device_flow(
                 ("device_code", &grant.device_code),
             ],
         );
-        let body = post_form(&client.token_url, &pairs, transport, ctrl).await?;
+        let body = post_form(
+            &client.token_url,
+            &pairs,
+            &client.endpoint_headers,
+            transport,
+            ctrl,
+        )
+        .await?;
         match body.get("error").and_then(Value::as_str) {
             Some("authorization_pending") => {}
             Some("slow_down") => interval += Duration::from_secs(5),
@@ -391,7 +406,14 @@ async fn code_flow_with_rng<R: TryRngCore>(
             ("code_verifier", verifier.expose()),
         ],
     );
-    let body = post_form(&client.token_url, &pairs, transport, ctrl).await?;
+    let body = post_form(
+        &client.token_url,
+        &pairs,
+        &client.endpoint_headers,
+        transport,
+        ctrl,
+    )
+    .await?;
     if let Some(e) = oauth_error(&body) {
         return Err(e);
     }
@@ -416,7 +438,14 @@ pub async fn refresh(
             ("refresh_token", refresh_token.expose()),
         ],
     );
-    let body = post_form(&client.token_url, &pairs, transport, ctrl).await?;
+    let body = post_form(
+        &client.token_url,
+        &pairs,
+        &client.endpoint_headers,
+        transport,
+        ctrl,
+    )
+    .await?;
     if let Some(e) = oauth_error(&body) {
         return Err(e);
     }
@@ -529,6 +558,7 @@ mod tests {
             scope: None,
             authorize_extra: vec![],
             token_extra: vec![],
+            endpoint_headers: http::HeaderMap::new(),
         }
     }
 

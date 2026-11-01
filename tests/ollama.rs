@@ -6,69 +6,10 @@ mod common;
 
 use std::sync::Arc;
 
+use a4mp::protocols::ollama::NdjsonDecoder;
 use a4mp::*;
 use common::{MockTransport, Response, body_json, collect};
 use serde_json::json;
-
-// The ollama modules are not yet declared in the crate's mod.rs files;
-// integration wiring lands separately. Compiling them in place here
-// resolves their `crate::` paths and exercises the same sources the
-// library ships — the shim can be dropped once they are wired.
-mod api {
-    pub use a4mp::api::*;
-}
-mod auth {
-    pub use a4mp::auth::*;
-}
-mod effects {
-    pub use a4mp::effects::*;
-}
-mod transport {
-    pub use a4mp::transport::*;
-}
-mod protocols {
-    pub mod ollama {
-        pub use crate::ollama_codec::*;
-    }
-
-    /// Stand-in for the crate-private media helper while the codec is
-    /// compiled in place.
-    pub(crate) fn base64_encode(data: &[u8]) -> String {
-        const ALPHABET: &[u8; 64] =
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-        for chunk in data.chunks(3) {
-            let mut n = 0u32;
-            for &b in chunk {
-                n = n << 8 | b as u32;
-            }
-            n <<= (3 - chunk.len()) * 8;
-            out.push(ALPHABET[(n >> 18) as usize & 63] as char);
-            out.push(ALPHABET[(n >> 12) as usize & 63] as char);
-            out.push(if chunk.len() > 1 {
-                ALPHABET[(n >> 6) as usize & 63] as char
-            } else {
-                '='
-            });
-            out.push(if chunk.len() > 2 {
-                ALPHABET[n as usize & 63] as char
-            } else {
-                '='
-            });
-        }
-        out
-    }
-}
-
-#[allow(dead_code)]
-#[path = "../src/protocols/ollama.rs"]
-mod ollama_codec;
-#[allow(dead_code)]
-#[path = "../src/providers/ollama.rs"]
-mod ollama_provider;
-
-use ollama_codec::NdjsonDecoder;
-use ollama_provider::OllamaAdapter;
 
 /// Local Ollama server: no credential material at all.
 fn adapter(transport: MockTransport) -> OllamaAdapter {
@@ -303,7 +244,7 @@ async fn chat_stream_decodes_thinking_deltas() {
         "\n",
     );
     let t = MockTransport::new();
-    t.push(Response::Sse(vec![BODY.into()]));
+    t.push(Response::Sse(vec![BODY]));
     let a = adapter(t);
     let st = a
         .chat_stream(ChatRequest::default(), &RequestControl::default())
@@ -359,6 +300,7 @@ async fn chat_stream_decodes_ndjson_split_mid_line() {
     let mut text = String::new();
     let mut tool_started = false;
     let mut args = String::new();
+    let mut ended = Vec::new();
     let mut usage = None;
     let mut finished = false;
     for e in &events {
@@ -367,6 +309,7 @@ async fn chat_stream_decodes_ndjson_split_mid_line() {
                 assert_eq!(*index, 0);
                 assert_eq!(*kind, PartKind::Text);
             }
+            StreamEvent::PartFinished { index } => ended.push(*index),
             StreamEvent::TextDelta { text: d, .. } => text.push_str(d),
             StreamEvent::ToolCallStarted { index, name, .. } => {
                 assert_eq!(*index, 1);
@@ -382,6 +325,8 @@ async fn chat_stream_decodes_ndjson_split_mid_line() {
     assert_eq!(text, "Hello");
     assert!(tool_started);
     assert_eq!(args, "{\"q\":\"x\"}");
+    // Open text and tool parts are closed before Finished.
+    assert_eq!(ended, [0, 1]);
     assert_eq!(usage, Some((Some(9), Some(3))));
     assert!(finished);
 }
@@ -497,8 +442,10 @@ async fn chat_rejects_url_images_and_named_tool_choice() {
     let err = a.chat(req, &RequestControl::default()).await.unwrap_err();
     assert!(matches!(err, Error::Unsupported(_)));
 
-    let mut req = ChatRequest::default();
-    req.tool_choice = Some(ToolChoice::Required);
+    let req = ChatRequest {
+        tool_choice: Some(ToolChoice::Required),
+        ..Default::default()
+    };
     let err = a.chat(req, &RequestControl::default()).await.unwrap_err();
     assert!(matches!(err, Error::Unsupported(_)));
 

@@ -195,20 +195,21 @@ async fn open_realtime_handshakes_ws_url_beta_header_and_session_update() {
     assert_eq!(req.headers.get("openai-beta").unwrap(), "realtime=v1");
 
     // session.update carries modalities plus extension fields verbatim.
-    let sent = sent.lock().unwrap();
-    assert_eq!(sent.len(), 1);
-    assert_eq!(
-        sent[0],
-        json!({
-            "type": "session.update",
-            "session": {
-                "modalities": ["text", "audio"],
-                "voice": "alloy",
-                "turn_detection": {"type": "server_vad"},
-            }
-        })
-    );
-    drop(sent);
+    {
+        let sent = sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(
+            sent[0],
+            json!({
+                "type": "session.update",
+                "session": {
+                    "modalities": ["text", "audio"],
+                    "voice": "alloy",
+                    "turn_detection": {"type": "server_vad"},
+                }
+            })
+        );
+    }
 
     // The server's session.created surfaces as a verbatim Native event.
     match next_event(&mut session).await.unwrap().unwrap() {
@@ -260,7 +261,12 @@ async fn open_realtime_surfaces_unsupported_transport() {
         Err(e) => e,
         Ok(_) => panic!("expected unsupported-transport error"),
     };
-    assert!(matches!(err, Error::Transport(TransportError::Io(_))));
+    assert!(matches!(
+        err,
+        Error::Transport(TransportError::Unsupported(_))
+    ));
+    // Nothing was dispatched: the unsupported channel is retry-safe.
+    assert_eq!(err.retry_safety(), RetrySafety::Safe);
 }
 
 // ---------------------------------------------------------------------------

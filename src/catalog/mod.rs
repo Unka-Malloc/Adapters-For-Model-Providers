@@ -60,6 +60,15 @@ impl ServiceDef {
     /// placeholders in `base_url` with values from `vars`. Unknown
     /// placeholder names make materialization fail with a protocol error
     /// naming the missing variable — never a silently literal URL.
+    ///
+    /// Values are host-supplied (account ids, resource names), so each
+    /// must be a single URL atom: no `/ ? # @ :` or backslash (authority
+    /// or path injection), no whitespace, no `..` (path escape). After
+    /// substitution the materialized URL must still be `https` and its
+    /// authority must match the template's declared host pattern —
+    /// `{name}` spans may expand, literal segments must not move — so a
+    /// host value can never redirect the request off the declared
+    /// endpoint. Checks fail closed with `Error::Protocol`.
     pub fn target_with(
         &self,
         provider: &ProviderId,
@@ -67,6 +76,7 @@ impl ServiceDef {
     ) -> Result<ServiceTarget, Error> {
         let mut resolved = self.base_url.to_owned();
         for (key, value) in vars {
+            check_endpoint_var(provider, key, value)?;
             resolved = resolved.replace(&format!("{{{key}}}"), value);
         }
         if let Some(start) = resolved.find('{') {
@@ -78,12 +88,50 @@ impl ServiceDef {
                 )));
             }
         }
-        self.materialize(provider, &resolved)
+        self.materialize_checked(provider, &resolved)
+    }
+
+    /// [`Self::materialize`] plus the template-materialization post
+    /// checks: https only, and the resolved authority must fit the
+    /// template host pattern.
+    fn materialize_checked(
+        &self,
+        provider: &ProviderId,
+        base_url: &str,
+    ) -> Result<ServiceTarget, Error> {
+        let url = url::Url::parse(base_url)
+            .map_err(|e| Error::Protocol(format!("profile {} endpoint {e}", provider.as_str())))?;
+        if url.scheme() != "https" {
+            return Err(Error::Protocol(format!(
+                "profile {} endpoint must be https after substitution",
+                provider.as_str()
+            )));
+        }
+        if !template_host_matches(self.base_url, &url) {
+            return Err(Error::Protocol(format!(
+                "profile {} endpoint authority left its declared host",
+                provider.as_str()
+            )));
+        }
+        self.build_target(provider, url)
     }
 
     fn materialize(&self, provider: &ProviderId, base_url: &str) -> Result<ServiceTarget, Error> {
+        // An unmaterialized template must never surface as a literal URL:
+        // `{`/`}` are legal to url::Url::parse, so leftover placeholders
+        // are refused here rather than shipped as an endpoint.
+        if base_url.contains(['{', '}']) {
+            return Err(Error::Protocol(format!(
+                "profile {} endpoint has unsubstituted placeholders",
+                provider.as_str()
+            )));
+        }
         let url = url::Url::parse(base_url)
             .map_err(|e| Error::Protocol(format!("profile {} endpoint {e}", provider.as_str())))?;
+        self.build_target(provider, url)
+    }
+
+    fn build_target(&self, provider: &ProviderId, url: url::Url) -> Result<ServiceTarget, Error> {
         let mut target = ServiceTarget::new(provider.clone(), self.protocol.clone(), url);
         target.region = self.region.map(str::to_owned);
         for (k, v) in self.headers {
@@ -98,7 +146,77 @@ impl ServiceDef {
     }
 }
 
-/// Declarative profile for one provider's access surface.
+/// One endpoint variable must stay a single URL atom: any authority or
+/// path-structure character would let a host-supplied value redirect the
+/// endpoint, and `..` lets a path variable walk out of it.
+fn check_endpoint_var(provider: &ProviderId, key: &str, value: &str) -> Result<(), Error> {
+    let bad = value.is_empty()
+        || value.contains("..")
+        || value.bytes().any(|b| {
+            matches!(b, b'/' | b'?' | b'#' | b'@' | b':' | b'\\') || b.is_ascii_whitespace()
+        });
+    if bad {
+        return Err(Error::Protocol(format!(
+            "profile {} endpoint variable {{{key}}} has an invalid value",
+            provider.as_str()
+        )));
+    }
+    Ok(())
+}
+
+/// Does `url`'s authority still fit the host portion of `template`?
+/// The template's host is matched as an anchored glob: `{name}` spans
+/// expand to any middle text, every literal segment must appear in
+/// order, anchored at both ends. So `{resource}.openai.azure.com`
+/// accepts `myres.openai.azure.com` and rejects `evil.example`.
+fn template_host_matches(template: &str, url: &url::Url) -> bool {
+    let Some(authority) = template.split("://").nth(1) else {
+        return false;
+    };
+    let template_host = authority.split(['/', '?', '#']).next().unwrap_or("");
+    let host = match url.port() {
+        Some(port) => format!("{}:{port}", url.host_str().unwrap_or("")),
+        None => url.host_str().unwrap_or("").to_owned(),
+    };
+    let host = host.to_ascii_lowercase();
+
+    // Literal segments between `{name}` spans, in order.
+    let mut segments = Vec::new();
+    let mut rest = template_host;
+    while let Some(open) = rest.find('{') {
+        segments.push(&rest[..open]);
+        match rest[open..].find('}') {
+            Some(close) => rest = &rest[open + close + 1..],
+            None => {
+                segments.push(rest);
+                rest = "";
+            }
+        }
+    }
+    segments.push(rest);
+
+    let mut pos = 0usize;
+    let last = segments.len() - 1;
+    for (i, seg) in segments.iter().enumerate() {
+        if seg.is_empty() {
+            continue;
+        }
+        if i == 0 {
+            if !host.starts_with(seg) {
+                return false;
+            }
+            pos = seg.len();
+        } else if i == last {
+            return host[pos..].ends_with(seg);
+        } else {
+            match host[pos..].find(seg) {
+                Some(found) => pos += found + seg.len(),
+                None => return false,
+            }
+        }
+    }
+    true
+}
 ///
 /// `targets` enumerates service endpoints × protocols (regional plans,
 /// native vs compatible dialects). `auth` enumerates accepted credential
@@ -208,7 +326,9 @@ impl Default for Catalog {
 impl Catalog {
     /// Registry with the crate's built-in adapter factories registered.
     pub fn with_builtin_adapters() -> Self {
-        let mut c = Self::new(builtin_profiles());
+        // Builtin profiles are crate data; a collision is a build bug
+        // caught by the uniqueness tests, not a runtime condition.
+        let mut c = Self::new(builtin_profiles()).expect("builtin profiles are unique");
         c.register_openai();
         c.register_anthropic();
         c.register_gemini();
@@ -219,20 +339,53 @@ impl Catalog {
     }
 
     /// Registry over an explicit profile set, no adapter factories.
-    pub fn new(profiles: Vec<ProviderProfile>) -> Self {
-        let mut aliases = HashMap::new();
-        let mut by_id = HashMap::new();
+    ///
+    /// Registration is fail-closed: a duplicated canonical id, an alias
+    /// claimed by two profiles, or an alias spelling another profile's
+    /// canonical id is a `Error::Protocol` collision — never a silent
+    /// overwrite that would misresolve a provider name.
+    pub fn new(profiles: Vec<ProviderProfile>) -> Result<Self, Error> {
+        let mut aliases: HashMap<String, ProviderId> = HashMap::new();
+        let mut by_id: HashMap<ProviderId, ProviderProfile> = HashMap::new();
         for p in profiles {
             for a in p.aliases {
-                aliases.insert(a.to_ascii_lowercase(), p.id.clone());
+                let key = a.to_ascii_lowercase();
+                match aliases.get(&key) {
+                    Some(other) if *other != p.id => {
+                        return Err(Error::Protocol(format!(
+                            "alias {a:?} claimed by {} and {}",
+                            other.as_str(),
+                            p.id.as_str()
+                        )));
+                    }
+                    _ => {
+                        aliases.insert(key, p.id.clone());
+                    }
+                }
             }
-            by_id.insert(p.id.clone(), p);
+            if by_id.insert(p.id.clone(), p.clone()).is_some() {
+                return Err(Error::Protocol(format!(
+                    "duplicate provider id {:?}",
+                    p.id.as_str()
+                )));
+            }
         }
-        Self {
+        for (key, owner) in &aliases {
+            if let Some(other) = by_id.get(&ProviderId::new(key)) {
+                if other.id != *owner {
+                    return Err(Error::Protocol(format!(
+                        "alias {key:?} of {} shadows provider id {}",
+                        owner.as_str(),
+                        other.id.as_str()
+                    )));
+                }
+            }
+        }
+        Ok(Self {
             profiles: by_id,
             aliases,
             adapters: HashMap::new(),
-        }
+        })
     }
 
     /// Register an adapter factory for one protocol family.
@@ -417,11 +570,18 @@ impl Client {
             .catalog
             .resolve(provider)
             .ok_or_else(|| Error::Unsupported(format!("unknown provider {provider:?}")))?;
-        let target = profile.try_target_for(
-            &protocol.unwrap_or_else(|| profile.targets[0].protocol.clone()),
-            region,
-            vars,
-        )?;
+        let protocol = match protocol {
+            Some(p) => p,
+            None => profile
+                .targets
+                .first()
+                .ok_or_else(|| {
+                    Error::Unsupported(format!("profile {} has no service targets", provider))
+                })?
+                .protocol
+                .clone(),
+        };
+        let target = profile.try_target_for(&protocol, region, vars)?;
         self.catalog.bind(
             target,
             auth,

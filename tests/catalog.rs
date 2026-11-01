@@ -164,3 +164,218 @@ fn profile_target_joins_endpoint_paths() {
         "https://api.deepseek.com/chat/completions"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Registration collisions
+// ---------------------------------------------------------------------------
+
+fn test_profile(id: &'static str, aliases: &'static [&'static str]) -> ProviderProfile {
+    ProviderProfile {
+        id: id.into(),
+        name: "Test",
+        aliases,
+        auth: vec![AuthSpec::ApiKey],
+        targets: vec![ServiceDef {
+            protocol: Protocol::OpenAiChatCompletions,
+            base_url: "https://api.example.test",
+            region: None,
+            headers: &[],
+        }],
+        catalogue: None,
+    }
+}
+
+#[test]
+fn builtin_profiles_have_unique_ids_and_aliases() {
+    // Registration is fail-closed: the builtin set must pass it.
+    Catalog::new(a4mp::catalog::builtin_profiles()).unwrap();
+}
+
+#[test]
+fn duplicate_ids_and_aliases_are_rejected() {
+    // Duplicate canonical id.
+    match Catalog::new(vec![test_profile("a", &[]), test_profile("a", &[])]) {
+        Err(Error::Protocol(m)) => assert!(m.contains("a"), "{m}"),
+        Err(e) => panic!("expected collision error, got {e:?}"),
+        Ok(_) => panic!("expected collision error, got Ok"),
+    }
+    // Two profiles claiming one alias.
+    match Catalog::new(vec![test_profile("a", &["x"]), test_profile("b", &["x"])]) {
+        Err(Error::Protocol(_)) => {}
+        Err(e) => panic!("expected collision error, got {e:?}"),
+        Ok(_) => panic!("expected collision error, got Ok"),
+    }
+    // Same alias spelled with different case still collides.
+    match Catalog::new(vec![test_profile("a", &["X"]), test_profile("b", &["x"])]) {
+        Err(Error::Protocol(_)) => {}
+        Err(e) => panic!("expected collision error, got {e:?}"),
+        Ok(_) => panic!("expected collision error, got Ok"),
+    }
+    // An alias spelling another profile's canonical id would misresolve.
+    match Catalog::new(vec![test_profile("a", &["b"]), test_profile("b", &[])]) {
+        Err(Error::Protocol(_)) => {}
+        Err(e) => panic!("expected collision error, got {e:?}"),
+        Ok(_) => panic!("expected collision error, got Ok"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Templated endpoints (per-resource base URLs)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn template_materializes_with_endpoint_variables() {
+    let catalog = Catalog::default();
+    let profile = catalog.resolve("azure-openai").unwrap();
+    let vars = std::collections::BTreeMap::from([("resource", "myres")]);
+    let target = profile
+        .try_target_for(&Protocol::OpenAiChatCompletions, None, &vars)
+        .unwrap();
+    assert_eq!(
+        target.base_url.as_str(),
+        "https://myres.openai.azure.com/openai/v1"
+    );
+
+    // A path-scoped variable keeps the declared host and path shape.
+    let cf = catalog.resolve("cloudflare-workers-ai").unwrap();
+    let vars = std::collections::BTreeMap::from([("account_id", "acct9")]);
+    let target = cf
+        .try_target_for(&Protocol::OpenAiChatCompletions, None, &vars)
+        .unwrap();
+    assert_eq!(
+        target.base_url.as_str(),
+        "https://api.cloudflare.com/client/v4/accounts/acct9/ai/v1"
+    );
+}
+
+#[test]
+fn template_missing_variable_names_the_placeholder() {
+    let catalog = Catalog::default();
+    let profile = catalog.resolve("azure-openai").unwrap();
+    match profile.try_target_for(&Protocol::OpenAiChatCompletions, None, &Default::default()) {
+        Err(Error::Protocol(m)) => assert!(m.contains("resource"), "{m}"),
+        Err(e) => panic!("expected Protocol error, got {e:?}"),
+        Ok(_) => panic!("expected Protocol error, got Ok"),
+    }
+    // An unmaterialized template must never surface as a literal URL.
+    assert!(
+        profile
+            .target_for(&Protocol::OpenAiChatCompletions, None)
+            .is_none()
+    );
+}
+
+#[test]
+fn template_values_cannot_inject_authority_or_paths() {
+    let catalog = Catalog::default();
+    let profile = catalog.resolve("azure-openai").unwrap();
+    for bad in [
+        "evil.com/x",
+        "a?x=1",
+        "a#frag",
+        "user@host",
+        "a:443",
+        "a\\b",
+        "has space",
+        "..",
+        "a..b",
+        "",
+    ] {
+        let vars = std::collections::BTreeMap::from([("resource", bad)]);
+        match profile.try_target_for(&Protocol::OpenAiChatCompletions, None, &vars) {
+            Err(Error::Protocol(_)) => {}
+            other => panic!("value {bad:?} must fail closed, got {other:?}"),
+        }
+    }
+    // A dotted value expands as a subdomain of the declared host only.
+    let vars = std::collections::BTreeMap::from([("resource", "a.b")]);
+    let target = profile
+        .try_target_for(&Protocol::OpenAiChatCompletions, None, &vars)
+        .unwrap();
+    assert_eq!(target.base_url.host_str(), Some("a.b.openai.azure.com"));
+}
+
+#[test]
+fn materialized_template_stays_https_and_on_host() {
+    // A hand-rolled http template must fail closed too.
+    let def = ServiceDef {
+        protocol: Protocol::OpenAiChatCompletions,
+        base_url: "http://{resource}.example.test",
+        region: None,
+        headers: &[],
+    };
+    let vars = std::collections::BTreeMap::from([("resource", "x")]);
+    match def.target_with(&"test".into(), &vars) {
+        Err(Error::Protocol(_)) => {}
+        other => panic!("http template must fail, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn bind_provider_with_materializes_template() {
+    let (client, _) = client();
+    let vars = std::collections::BTreeMap::from([("resource", "acct42")]);
+    let adapter = client
+        .bind_provider_with("azure", None, None, AuthKind::ApiKey, &vars)
+        .unwrap();
+    assert_eq!(
+        adapter.target().base_url.as_str(),
+        "https://acct42.openai.azure.com/openai/v1"
+    );
+}
+
+#[tokio::test]
+async fn template_bind_rejects_bad_value_before_dispatch() {
+    let (client, transport) = client();
+    let vars = std::collections::BTreeMap::from([("resource", "a/b")]);
+    match client.bind_provider_with("azure", None, None, AuthKind::ApiKey, &vars) {
+        Err(Error::Protocol(_)) => {}
+        Err(e) => panic!("expected Protocol error, got {e:?}"),
+        Ok(_) => panic!("expected Protocol error, got Ok"),
+    }
+    assert!(transport.recorded().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Target selection: regions, fallback, empty profiles
+// ---------------------------------------------------------------------------
+
+#[test]
+fn region_filter_selects_or_misses() {
+    let catalog = Catalog::default();
+    let moonshot = catalog.resolve("moonshotai").unwrap();
+    assert!(
+        moonshot
+            .target_for(&Protocol::OpenAiChatCompletions, Some("bogus-region"))
+            .is_none()
+    );
+}
+
+#[test]
+fn unmatched_protocol_falls_back_to_primary_target() {
+    let catalog = Catalog::default();
+    let profile = catalog.resolve("deepseek").unwrap();
+    let target = profile
+        .target_for(&Protocol::Other("no-such-family".into()), None)
+        .unwrap();
+    assert_eq!(target.protocol, Protocol::OpenAiChatCompletions);
+}
+
+#[tokio::test]
+async fn empty_target_profile_reports_unsupported_not_panic() {
+    let mut empty = test_profile("empty", &[]);
+    empty.targets.clear();
+    let catalog = Catalog::new(vec![empty]).unwrap();
+    let client = Client::new(
+        catalog,
+        Arc::new(MockTransport::new()),
+        Arc::new(StaticCredential(Credential::ApiKey(Secret::new(
+            common::run_token("api-key"),
+        )))),
+    );
+    match client.bind_provider("empty", None, None, AuthKind::ApiKey) {
+        Err(Error::Unsupported(_)) => {}
+        Err(e) => panic!("expected Unsupported, got {e:?}"),
+        Ok(_) => panic!("expected Unsupported, got Ok"),
+    }
+}

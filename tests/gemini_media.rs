@@ -3,7 +3,6 @@
 //! job lifecycle (submit, poll, cancel). Payloads are hand-authored
 //! from the v1beta wire contract, not copied from reference projects.
 
-#[allow(dead_code)]
 mod common;
 
 use std::sync::Arc;
@@ -225,8 +224,16 @@ async fn image_error_envelope_after_2xx_is_unsafe_to_retry() {
         )
         .await
     {
-        Err(Error::Provider { status, retry, .. }) => {
-            assert_eq!(status, Some(400));
+        Err(Error::Provider {
+            status,
+            code,
+            retry,
+            ..
+        }) => {
+            // A 2xx-carried error.code is the provider's domain code, not
+            // an HTTP status: status stays empty and retry is unsafe.
+            assert_eq!(status, None);
+            assert_eq!(code.as_deref(), Some("INVALID_ARGUMENT"));
             assert_eq!(retry, RetrySafety::Unsafe);
         }
         other => panic!("expected provider error, got {other:?}"),
@@ -330,8 +337,14 @@ async fn submit_job_error_envelope_after_2xx_is_unsafe_to_retry() {
         .submit_job(JobOperation::Video(req), &RequestControl::default())
         .await
     {
-        Err(Error::Provider { status, retry, .. }) => {
-            assert_eq!(status, Some(429));
+        Err(Error::Provider {
+            status,
+            code,
+            retry,
+            ..
+        }) => {
+            assert_eq!(status, None);
+            assert_eq!(code.as_deref(), Some("RESOURCE_EXHAUSTED"));
             assert_eq!(retry, RetrySafety::Unsafe);
         }
         other => panic!("expected provider error, got {other:?}"),
@@ -439,17 +452,79 @@ async fn job_state_encodes_operation_name_segments() {
     t.push(Response::Json(200, json!({"done": false})));
     let a = adapter(t.clone());
     a.job_state(
-        &handle("models/veo 3/operations/op?1"),
+        &handle("models/v\u{e9}o-3/operations/op.1"),
         &RequestControl::default(),
     )
     .await
     .unwrap();
-    // Reserved characters inside one segment are percent-encoded; the
-    // `/` separators stay path separators.
+    // Characters outside the unreserved set percent-encode inside a
+    // segment; the `/` separators stay path separators.
     assert_eq!(
         t.recorded()[0].url.path(),
-        "/v1beta/models/veo%203/operations/op%3F1"
+        "/v1beta/models/v%C3%A9o-3/operations/op.1"
     );
+}
+
+#[tokio::test]
+async fn job_handles_bound_elsewhere_are_rejected() {
+    // A handle must be minted by this adapter's provider+protocol — a
+    // replayed or cross-tenant handle never builds a request path.
+    let t = MockTransport::new();
+    let a = adapter(t.clone());
+    for bad in [
+        JobHandle {
+            provider: ProviderId::new("other-tenant"),
+            protocol: Protocol::GeminiGenerateContent,
+            id: "models/veo-3/operations/op-1".into(),
+            state: json!({}),
+        },
+        JobHandle {
+            provider: ProviderId::new("test-gemini"),
+            protocol: Protocol::OpenAiChatCompletions,
+            id: "models/veo-3/operations/op-1".into(),
+            state: json!({}),
+        },
+    ] {
+        match a.job_state(&bad, &RequestControl::default()).await {
+            Err(Error::Protocol(_)) => {}
+            other => panic!("expected Protocol error, got {other:?}"),
+        }
+        match a.cancel_job(&bad, &RequestControl::default()).await {
+            Err(Error::Protocol(_)) => {}
+            other => panic!("expected Protocol error, got {other:?}"),
+        }
+    }
+    assert!(t.recorded().is_empty(), "no request may be dispatched");
+}
+
+#[tokio::test]
+async fn operation_names_with_path_metacharacters_are_rejected() {
+    // Segments that could escape the /v1beta/ operation namespace or
+    // inject query/fragment syntax never reach the wire.
+    let t = MockTransport::new();
+    let a = adapter(t.clone());
+    for id in [
+        "../v1beta/models",
+        "models/../operations/x",
+        "models/x?y=1",
+        "models/x#y",
+        "models/x:y",
+        "models/x%20y",
+        "models//x",
+        "veo 3/operations/op",
+        "",
+    ] {
+        let h = handle(id);
+        match a.job_state(&h, &RequestControl::default()).await {
+            Err(Error::Protocol(_)) => {}
+            other => panic!("id {id:?} must fail closed, got {other:?}"),
+        }
+        match a.cancel_job(&h, &RequestControl::default()).await {
+            Err(Error::Protocol(_)) => {}
+            other => panic!("id {id:?} must fail closed, got {other:?}"),
+        }
+    }
+    assert!(t.recorded().is_empty(), "no request may be dispatched");
 }
 
 #[tokio::test]

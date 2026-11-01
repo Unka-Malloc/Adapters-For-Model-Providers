@@ -17,7 +17,7 @@ use serde_json::Value;
 use crate::api::{Error, RequestControl, RetrySafety};
 use crate::auth::{Credential, Secret};
 use crate::effects::EffectHost;
-use crate::oauth::{self, DeviceGrant, OAuthClient, OAuthToken};
+use crate::oauth::{self, OAuthClient, OAuthToken};
 use crate::transport::{HttpRequest, Transport};
 
 fn const_url(text: &str) -> url::Url {
@@ -71,7 +71,16 @@ pub struct CopilotToken {
 /// The public GitHub OAuth App registration first-party Copilot clients
 /// use for the device grant (`Iv1.*` is GitHub's OAuth App client-id
 /// namespace). Device grant only; this client has no redirect surface.
+///
+/// GitHub's OAuth endpoints content-negotiate on `Accept` and default to
+/// form-encoded responses, so the client declares `Accept:
+/// application/json` on every endpoint post.
 pub fn copilot_oauth_client() -> OAuthClient {
+    let mut endpoint_headers = http::HeaderMap::new();
+    endpoint_headers.insert(
+        http::header::ACCEPT,
+        http::HeaderValue::from_static("application/json"),
+    );
     OAuthClient {
         client_id: "Iv1.b507a08c87ecfe98".into(),
         client_secret: None,
@@ -81,138 +90,8 @@ pub fn copilot_oauth_client() -> OAuthClient {
         scope: Some("read:user".into()),
         authorize_extra: vec![],
         token_extra: vec![],
+        endpoint_headers,
     }
-}
-
-/// Form post to a GitHub OAuth endpoint. GitHub negotiates the response
-/// format on `Accept` and defaults to `application/x-www-form-urlencoded`,
-/// so the grant asks for JSON explicitly; the shared
-/// [`crate::oauth`] post helper cannot carry the header, hence this
-/// local variant.
-async fn github_post_form(
-    url: &url::Url,
-    pairs: &[(String, String)],
-    transport: &dyn Transport,
-    ctrl: &RequestControl,
-) -> Result<Value, Error> {
-    let mut req = HttpRequest::post_json(url.clone(), Value::Null);
-    req.headers.insert(
-        http::header::CONTENT_TYPE,
-        http::HeaderValue::from_static("application/x-www-form-urlencoded"),
-    );
-    req.headers.insert(
-        http::header::ACCEPT,
-        http::HeaderValue::from_static("application/json"),
-    );
-    req.body = url::form_urlencoded::Serializer::new(String::new())
-        .extend_pairs(pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-        .finish()
-        .into();
-    let res = transport.send(req, ctrl).await?;
-    serde_json::from_slice(&res.body)
-        .map_err(|e| Error::UpstreamProtocol(format!("token endpoint returned non-JSON: {e}")))
-}
-
-/// Map an OAuth error payload: polling states return `None` so the
-/// caller keeps going; terminal states surface.
-fn github_oauth_error(body: &Value) -> Option<Error> {
-    let code = body.get("error").and_then(Value::as_str)?;
-    let desc = body
-        .get("error_description")
-        .and_then(Value::as_str)
-        .unwrap_or(code);
-    match code {
-        "authorization_pending" | "slow_down" => None,
-        "access_denied" | "expired_token" => Some(Error::Credential(desc.to_owned())),
-        _ => Some(Error::Provider {
-            status: None,
-            code: Some(code.to_owned()),
-            message: desc.to_owned(),
-            retry: RetrySafety::Safe,
-            raw: Some(body.clone()),
-        }),
-    }
-}
-
-fn github_decode_token(body: &Value) -> Result<OAuthToken, Error> {
-    let access = body
-        .get("access_token")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::UpstreamProtocol("token response missing access_token".into()))?;
-    let expires_at = body
-        .get("expires_in")
-        .and_then(Value::as_u64)
-        .map(|s| SystemTime::now() + Duration::from_secs(s));
-    Ok(OAuthToken {
-        access_token: Secret::new(access),
-        refresh_token: body
-            .get("refresh_token")
-            .and_then(Value::as_str)
-            .map(Secret::new),
-        token_type: body
-            .get("token_type")
-            .and_then(Value::as_str)
-            .unwrap_or("Bearer")
-            .to_owned(),
-        expires_at,
-        scope: body.get("scope").and_then(Value::as_str).map(str::to_owned),
-        raw: body.clone(),
-    })
-}
-
-/// Device-authorization step against GitHub: same contract as
-/// [`crate::oauth::device_authorize`] through the JSON-negotiating post.
-async fn github_device_authorize(
-    client: &OAuthClient,
-    transport: &dyn Transport,
-    ctrl: &RequestControl,
-) -> Result<DeviceGrant, Error> {
-    let url = client
-        .device_url
-        .clone()
-        .ok_or_else(|| Error::Unsupported("client has no device-authorization endpoint".into()))?;
-    let mut pairs = vec![("client_id".to_owned(), client.client_id.clone())];
-    if let Some(scope) = &client.scope {
-        pairs.push(("scope".into(), scope.clone()));
-    }
-    pairs.extend(client.authorize_extra.iter().cloned());
-    let body = github_post_form(&url, &pairs, transport, ctrl).await?;
-    if let Some(e) = github_oauth_error(&body) {
-        return Err(e);
-    }
-    let get_str = |k: &str| -> Result<String, Error> {
-        body.get(k)
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .ok_or_else(|| Error::UpstreamProtocol(format!("device grant missing {k}")))
-    };
-    let parse_url = |s: &str| -> Result<url::Url, Error> {
-        url::Url::parse(s)
-            .map_err(|e| Error::UpstreamProtocol(format!("bad verification URI: {e}")))
-    };
-    Ok(DeviceGrant {
-        device_code: get_str("device_code")?,
-        user_code: get_str("user_code")?,
-        verification_uri: parse_url(&get_str("verification_uri")?)?,
-        verification_uri_complete: body
-            .get("verification_uri_complete")
-            .and_then(Value::as_str)
-            .map(parse_url)
-            .transpose()?,
-        expires_at: SystemTime::now()
-            + Duration::from_secs(
-                body.get("expires_in")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(600),
-            ),
-        interval: Duration::from_secs(
-            body.get("interval")
-                .and_then(Value::as_u64)
-                .unwrap_or(5)
-                .max(1),
-        ),
-        raw: body,
-    })
 }
 
 /// Run the GitHub device grant for the Copilot OAuth App: authorize,
@@ -224,42 +103,7 @@ pub async fn copilot_device_flow(
     effects: &dyn EffectHost,
     ctrl: &RequestControl,
 ) -> Result<OAuthToken, Error> {
-    let client = copilot_oauth_client();
-    let grant = github_device_authorize(&client, transport, ctrl).await?;
-    effects
-        .present_url(
-            grant
-                .verification_uri_complete
-                .as_ref()
-                .unwrap_or(&grant.verification_uri),
-            ctrl,
-        )
-        .await?;
-    let mut interval = grant.interval;
-    loop {
-        if ctrl.cancel.is_cancelled() {
-            return Err(Error::Cancelled);
-        }
-        if SystemTime::now() >= grant.expires_at {
-            return Err(Error::Credential("device grant expired".into()));
-        }
-        let pairs = vec![
-            (
-                "grant_type".to_owned(),
-                "urn:ietf:params:oauth:grant-type:device_code".to_owned(),
-            ),
-            ("device_code".to_owned(), grant.device_code.clone()),
-            ("client_id".to_owned(), client.client_id.clone()),
-        ];
-        let body = github_post_form(&client.token_url, &pairs, transport, ctrl).await?;
-        match body.get("error").and_then(Value::as_str) {
-            Some("authorization_pending") => {}
-            Some("slow_down") => interval += Duration::from_secs(5),
-            Some(_) => return Err(github_oauth_error(&body).unwrap()),
-            None => return github_decode_token(&body),
-        }
-        effects.sleep(interval, ctrl).await?;
-    }
+    oauth::device_flow(&copilot_oauth_client(), transport, effects, ctrl).await
 }
 
 /// Exchange a GitHub OAuth token for a Copilot session token. The
@@ -405,6 +249,7 @@ pub fn codex_oauth_client() -> OAuthClient {
             ("id_token_add_organizations".into(), "true".into()),
         ],
         token_extra: vec![],
+        endpoint_headers: http::HeaderMap::new(),
     }
 }
 

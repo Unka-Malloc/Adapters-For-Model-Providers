@@ -19,11 +19,22 @@ pub struct SseEvent {
     pub id: Option<String>,
 }
 
+/// A single SSE frame is capped at 8 MiB: frames carry one JSON event
+/// apiece and are kilobytes in practice, so an unterminated line or
+/// separator-free blob beyond this is a peer pathological enough to cut
+/// off rather than keep buffering.
+const MAX_FRAME: usize = 8 * 1024 * 1024;
+
 /// Incremental byte→frame decoder. Frames may split across arbitrary
 /// chunk boundaries; `feed` yields only complete frames.
 #[derive(Default)]
 pub struct SseDecoder {
     buf: Vec<u8>,
+    /// Bytes already proven not to start a frame separator — scanning
+    /// for `\n\n` resumes here instead of rescanning every chunk from
+    /// zero (a terminator is always `\n`-led, so the cursor may sit at a
+    /// `\n` whose lookahead was incomplete).
+    scan: usize,
 }
 
 impl SseDecoder {
@@ -32,21 +43,39 @@ impl SseDecoder {
     }
 
     /// Feed bytes; returns every complete frame now decodable.
-    pub fn feed(&mut self, bytes: &[u8]) -> Vec<SseEvent> {
+    /// `Error::Protocol` when the buffered frame outgrows the cap —
+    /// an unbounded line or separator-less blob is a broken peer.
+    pub fn feed(&mut self, bytes: &[u8]) -> Result<Vec<SseEvent>, Error> {
         self.buf.extend_from_slice(bytes);
+        if self.buf.len() > MAX_FRAME {
+            return Err(Error::Protocol(format!(
+                "SSE frame exceeds {} MiB cap",
+                MAX_FRAME / (1024 * 1024)
+            )));
+        }
         let mut out = Vec::new();
-        while let Some((frame_len, total)) = find_frame_end(&self.buf) {
-            let frame: Vec<u8> = self.buf.drain(..frame_len).collect();
-            self.buf.drain(..total - frame_len);
-            if let Some(ev) = parse_frame(&frame) {
-                out.push(ev);
+        loop {
+            match find_frame_end(&self.buf, self.scan) {
+                (Some((frame_len, total)), _) => {
+                    let frame: Vec<u8> = self.buf.drain(..frame_len).collect();
+                    self.buf.drain(..total - frame_len);
+                    self.scan = 0;
+                    if let Some(ev) = parse_frame(&frame) {
+                        out.push(ev);
+                    }
+                }
+                (None, resume) => {
+                    self.scan = resume;
+                    break;
+                }
             }
         }
-        out
+        Ok(out)
     }
 
     /// End of stream: flush a trailing frame that had no terminator.
     pub fn finish(&mut self) -> Vec<SseEvent> {
+        self.scan = 0;
         let frame = std::mem::take(&mut self.buf);
         if frame.is_empty() {
             return Vec::new();
@@ -55,33 +84,49 @@ impl SseDecoder {
     }
 }
 
-/// Locate the first complete frame. Returns
-/// `(frame_len, total_len_including_separator)`.
-fn find_frame_end(buf: &[u8]) -> Option<(usize, usize)> {
-    for i in 0..buf.len() {
+/// Locate the first complete frame at or after `from`. Returns
+/// `(Some((frame_len, total_len_including_separator)), _)` on a hit, or
+/// `(None, resume)` where `resume` is the position scanning may safely
+/// restart from next feed — the earliest `\n` whose lookahead could not
+/// complete a separator, or `buf.len()` when none was seen.
+fn find_frame_end(buf: &[u8], from: usize) -> (Option<(usize, usize)>, usize) {
+    let mut i = from;
+    while i < buf.len() {
         if buf[i] != b'\n' {
+            i += 1;
             continue;
         }
+        if i + 1 >= buf.len() {
+            // Trailing `\n` — could lead a `\n\n` or `\n\r\n` next feed.
+            return (None, i);
+        }
         // "\n\n": LF-terminated line followed by a bare LF.
-        if i + 1 < buf.len() && buf[i + 1] == b'\n' {
+        if buf[i + 1] == b'\n' {
             let end = if i > 0 && buf[i - 1] == b'\r' {
                 i - 1
             } else {
                 i
             };
-            return Some((end, i + 2));
+            return (Some((end, i + 2)), 0);
         }
-        // "\n\r\n": LF-terminated line followed by a CRLF line.
-        if i + 2 < buf.len() && buf[i + 1] == b'\r' && buf[i + 2] == b'\n' {
-            let end = if i > 0 && buf[i - 1] == b'\r' {
-                i - 1
-            } else {
-                i
-            };
-            return Some((end, i + 3));
+        if buf[i + 1] == b'\r' {
+            if i + 2 >= buf.len() {
+                // Trailing `\n\r` — could complete to `\n\r\n` next feed.
+                return (None, i);
+            }
+            // "\n\r\n": LF-terminated line followed by a CRLF line.
+            if buf[i + 2] == b'\n' {
+                let end = if i > 0 && buf[i - 1] == b'\r' {
+                    i - 1
+                } else {
+                    i
+                };
+                return (Some((end, i + 3)), 0);
+            }
         }
+        i += 1;
     }
-    None
+    (None, buf.len())
 }
 
 fn parse_frame(frame: &[u8]) -> Option<SseEvent> {
@@ -149,10 +194,13 @@ impl Stream for SseStream {
                 return Poll::Ready(None);
             }
             match self.inner.as_mut().poll_next(cx) {
-                Poll::Ready(Some(Ok(bytes))) => {
-                    let events = self.decoder.feed(&bytes);
-                    self.pending.extend(events);
-                }
+                Poll::Ready(Some(Ok(bytes))) => match self.decoder.feed(&bytes) {
+                    Ok(events) => self.pending.extend(events),
+                    Err(e) => {
+                        self.finished = true;
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                },
                 Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
                 Poll::Ready(None) => {
                     self.finished = true;

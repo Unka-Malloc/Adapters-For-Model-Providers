@@ -10,65 +10,6 @@ use a4mp::*;
 use common::{MockTransport, Response, body_json, collect};
 use serde_json::json;
 
-// The cohere modules are not yet declared in the crate's mod.rs files;
-// integration wiring lands separately. Compiling them in place here
-// resolves their `crate::` paths and exercises the same sources the
-// library ships — the shim can be dropped once they are wired.
-mod api {
-    pub use a4mp::api::*;
-}
-mod auth {
-    pub use a4mp::auth::*;
-}
-mod effects {
-    pub use a4mp::effects::*;
-}
-mod transport {
-    pub use a4mp::transport::*;
-}
-mod protocols {
-    pub mod cohere {
-        pub use crate::cohere_codec::*;
-    }
-
-    /// Stand-in for the crate-private media helper while the codec is
-    /// compiled in place.
-    pub(crate) fn base64_encode(data: &[u8]) -> String {
-        const ALPHABET: &[u8; 64] =
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-        for chunk in data.chunks(3) {
-            let mut n = 0u32;
-            for &b in chunk {
-                n = n << 8 | b as u32;
-            }
-            n <<= (3 - chunk.len()) * 8;
-            out.push(ALPHABET[(n >> 18) as usize & 63] as char);
-            out.push(ALPHABET[(n >> 12) as usize & 63] as char);
-            out.push(if chunk.len() > 1 {
-                ALPHABET[(n >> 6) as usize & 63] as char
-            } else {
-                '='
-            });
-            out.push(if chunk.len() > 2 {
-                ALPHABET[n as usize & 63] as char
-            } else {
-                '='
-            });
-        }
-        out
-    }
-}
-
-#[allow(dead_code)]
-#[path = "../src/protocols/cohere.rs"]
-mod cohere_codec;
-#[allow(dead_code)]
-#[path = "../src/providers/cohere.rs"]
-mod cohere_provider;
-
-use cohere_provider::CohereAdapter;
-
 fn adapter(transport: MockTransport) -> CohereAdapter {
     let target = ServiceTarget::new(
         "cohere",

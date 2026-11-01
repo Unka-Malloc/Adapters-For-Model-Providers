@@ -682,3 +682,68 @@ async fn bridge_closes_chat_upstream_blocks_for_anthropic_client() {
     assert_eq!(starts, [0]);
     assert_eq!(stops, [0]);
 }
+
+#[tokio::test]
+async fn bridge_stream_surfaces_decode_and_encode_losses() {
+    use std::sync::Arc;
+
+    use futures_util::StreamExt;
+
+    struct LossAdapter(ServiceTarget);
+
+    #[async_trait::async_trait]
+    impl Adapter for LossAdapter {
+        fn target(&self) -> &ServiceTarget {
+            &self.0
+        }
+
+        async fn chat_stream(
+            &self,
+            _req: ChatRequest,
+            _ctrl: &RequestControl,
+        ) -> Result<DynStream<'static, StreamEvent>, Error> {
+            // A media part has no anthropic wire block: the dialect
+            // encoder reports an Unsupported loss while encoding.
+            Ok(Box::pin(futures_util::stream::iter(vec![
+                Ok(StreamEvent::PartStarted {
+                    index: 0,
+                    kind: PartKind::Media,
+                }),
+                Ok(StreamEvent::PartFinished { index: 0 }),
+                Ok(StreamEvent::Finished {
+                    stop: Some(StopReason::Complete),
+                }),
+            ])))
+        }
+    }
+
+    let target = ServiceTarget::new(
+        "test-provider",
+        Protocol::AnthropicMessages,
+        url::Url::parse("https://example.test").unwrap(),
+    );
+    let bridge = WireBridge::new(
+        Arc::new(LossAdapter(target)),
+        WireDialect::AnthropicMessages,
+    );
+    // The unknown message key is a decode-time lossy conversion.
+    let body =
+        br#"{"model":"claude-x","max_tokens":16,"messages":[{"role":"user","content":"hi","bogus":1}]}"#;
+    let mut stream = bridge
+        .chat_stream(body, &RequestControl::default())
+        .await
+        .unwrap();
+
+    // Decode losses are observable before the first frame.
+    assert_eq!(stream.report().losses.len(), 1);
+    let decode = stream.drain_losses();
+    assert_eq!(decode.len(), 1);
+    assert!(stream.report().losses.is_empty());
+
+    while stream.next().await.is_some() {}
+
+    // The encoder's media-part loss joins the same drainable sink.
+    let encode = stream.drain_losses();
+    assert_eq!(encode.len(), 1);
+    assert!(encode[0].path.contains("media"), "{encode:?}");
+}

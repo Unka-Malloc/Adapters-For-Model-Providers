@@ -545,6 +545,13 @@ pub struct EventStreamDecoder {
     buf: Vec<u8>,
 }
 
+/// Hard caps on a single frame: Converse events are kilobytes in
+/// practice, so a declared `total_len` beyond this is corruption or a
+/// memory-exhaustion attempt — rejected before any buffering, waiting or
+/// parsing. Header sections get a proportional bound of their own.
+const MAX_FRAME: usize = 8 * 1024 * 1024;
+const MAX_HEADERS: usize = 1024 * 1024;
+
 impl EventStreamDecoder {
     pub fn new() -> Self {
         Self::default()
@@ -553,6 +560,8 @@ impl EventStreamDecoder {
     /// Feed bytes; returns every complete frame now decodable. A
     /// malformed prelude or CRC mismatch is a protocol error: a corrupt
     /// frame cannot be resynchronized, so tolerance would hide damage.
+    /// The undrained buffer never exceeds the frame cap: `take_frame`
+    /// rejects an oversized declared length instead of waiting for it.
     pub fn feed(&mut self, bytes: &[u8]) -> Result<Vec<EventFrame>, Error> {
         self.buf.extend_from_slice(bytes);
         let mut out = Vec::new();
@@ -587,6 +596,18 @@ impl EventStreamDecoder {
             return Err(Error::UpstreamProtocol(
                 "event-stream frame lengths are inconsistent".into(),
             ));
+        }
+        if total > MAX_FRAME {
+            return Err(Error::UpstreamProtocol(format!(
+                "event-stream frame exceeds {} MiB cap",
+                MAX_FRAME / (1024 * 1024)
+            )));
+        }
+        if headers_len > MAX_HEADERS {
+            return Err(Error::UpstreamProtocol(format!(
+                "event-stream headers exceed {} MiB cap",
+                MAX_HEADERS / (1024 * 1024)
+            )));
         }
         if self.buf.len() < total {
             return Ok(None);
@@ -633,7 +654,7 @@ fn parse_headers(mut bytes: &[u8]) -> Result<Vec<(String, FrameValue)>, Error> {
 }
 
 /// Split `n` bytes off the front of a header-value buffer.
-fn take<'a>(b: &'a [u8], n: usize) -> Result<(&'a [u8], &'a [u8]), Error> {
+fn take(b: &[u8], n: usize) -> Result<(&[u8], &[u8]), Error> {
     if b.len() < n {
         Err(Error::UpstreamProtocol(
             "event-stream header value is truncated".into(),

@@ -157,6 +157,10 @@ pub enum TransportError {
     /// Body decode or I/O failure.
     #[error("io: {0}")]
     Io(String),
+    /// The transport does not offer this operation (e.g. `open_channel`
+    /// on an HTTP-only transport) — nothing was dispatched.
+    #[error("unsupported: {0}")]
+    Unsupported(String),
     /// Caller cancellation surfaced through the transport. The request may
     /// already have been dispatched when cancellation raced it.
     #[error("cancelled")]
@@ -166,13 +170,14 @@ pub enum TransportError {
 impl TransportError {
     /// Whether repeating the request could duplicate billed work.
     ///
-    /// `Connect` never reached the provider: safe. Everything else is
-    /// `Unsafe` — cancellation may race a dispatched request, and
-    /// mid-body failure may follow upstream acceptance, so automatic
-    /// retries are forbidden; the caller decides explicitly.
+    /// `Connect` never reached the provider and `Unsupported` dispatched
+    /// nothing: safe. Everything else is `Unsafe` — cancellation may
+    /// race a dispatched request, and mid-body failure may follow
+    /// upstream acceptance, so automatic retries are forbidden; the
+    /// caller decides explicitly.
     pub fn retry_safety(&self) -> RetrySafety {
         match self {
-            TransportError::Connect(_) => RetrySafety::Safe,
+            TransportError::Connect(_) | TransportError::Unsupported(_) => RetrySafety::Safe,
             TransportError::Cancelled | TransportError::Disconnected(_) | TransportError::Io(_) => {
                 RetrySafety::Unsafe
             }
@@ -214,14 +219,15 @@ pub trait Transport: Send + Sync {
     ) -> Result<StreamingResponse, TransportError>;
 
     /// Bidirectional channel for realtime session protocols.
-    /// Default reports unsupported; realtime-capable transports
-    /// (WebSocket implementations, host-provided channels) override.
+    /// Default reports `Unsupported` — retry-safe, since nothing was
+    /// dispatched; realtime-capable transports (WebSocket
+    /// implementations, host-provided channels) override.
     async fn open_channel(
         &self,
         _req: HttpRequest,
         _ctrl: &RequestControl,
     ) -> Result<Box<dyn DuplexChannel>, TransportError> {
-        Err(TransportError::Io(
+        Err(TransportError::Unsupported(
             "duplex channels not supported by this transport".into(),
         ))
     }

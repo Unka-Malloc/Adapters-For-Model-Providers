@@ -198,7 +198,7 @@ fn encode_part(part: &ContentPart, role: &str) -> Result<Value, Error> {
                         json!({ "type": "input_audio", "input_audio": { "data": data, "format": format } }),
                     )
                 }
-                MediaKind::File => Ok(json!({ "type": "file", "file": { "file_id": url } })),
+                MediaKind::File => encode_file_part(source, detail),
                 MediaKind::Video => Err(Error::Unsupported(
                     "video parts are not representable in chat completions".into(),
                 )),
@@ -212,6 +212,48 @@ fn encode_part(part: &ContentPart, role: &str) -> Result<Value, Error> {
         )),
         ContentPart::ToolResult(_) => unreachable!("tool results are split earlier"),
     }
+}
+
+/// Encode a canonical File part. Inline bytes become the wire's
+/// `file_data` data-URI; `file_id` is reserved for provider-uploaded
+/// file ids, which no canonical source can mint — inventing one (e.g.
+/// stuffing a data URI into `file_id`) produces a body no endpoint
+/// accepts, so unrepresentable sources fail explicitly instead.
+fn encode_file_part(source: &MediaSource, detail: &Option<String>) -> Result<Value, Error> {
+    let file = match source {
+        MediaSource::Inline { media_type, data } => json!({
+            "file_data": format!("data:{media_type};base64,{}", base64_encode(data)),
+            "filename": detail.clone().unwrap_or_else(|| file_name(media_type)),
+        }),
+        MediaSource::Url(_) => {
+            return Err(Error::Unsupported(
+                "remote file URLs are not fetchable by chat completions; upload the file or inline its bytes"
+                    .into(),
+            ));
+        }
+        MediaSource::Resource(id) => {
+            return Err(Error::Unsupported(format!(
+                "unresolved resource {id:?}; the adapter resolves resources first"
+            )));
+        }
+    };
+    Ok(json!({ "type": "file", "file": file }))
+}
+
+/// A filename derived from the media type (`application/pdf` →
+/// `file.pdf`); an explicit `detail` on the part wins over this name.
+fn file_name(media_type: &str) -> String {
+    let ext = media_type
+        .rsplit('/')
+        .next()
+        .and_then(|s| s.split(';').next())
+        .filter(|s| {
+            !s.is_empty()
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'+' | b'.'))
+        })
+        .unwrap_or("bin");
+    format!("file.{ext}")
 }
 
 fn tool_result_text(tr: &ToolResult) -> String {
@@ -561,6 +603,20 @@ impl crate::transport::SseEventDecoder for ChatStreamDecoder {
                 }
             }
             if let Some(reason) = choice["finish_reason"].as_str() {
+                // Close every open part first: consumers finalize per-part
+                // state on PartFinished, so a bare Finished must not leak
+                // them.
+                let mut open: Vec<u32> = self
+                    .reasoning_part
+                    .take()
+                    .into_iter()
+                    .chain(self.text_part.take())
+                    .chain(self.tool_parts.drain().map(|(_, i)| i))
+                    .collect();
+                open.sort_unstable();
+                for index in open {
+                    out.push(StreamEvent::PartFinished { index });
+                }
                 out.push(StreamEvent::Finished {
                     stop: Some(stop_reason(reason)),
                 });
