@@ -18,20 +18,23 @@ All notable changes to `a4mp` are recorded here. Versions follow
 
 ### Fixed
 
-- `ServiceDef::target_with` now routes non-template base URLs through
-  the same post-checks as substituted templates (`https` mandate, host
-  anchoring); a leading `{name}` variable's value is validated by
-  `check_endpoint_var` rather than re-parsed inline, so the two value
-  classes share one check.
+- One endpoint policy now covers every materialization path — literal
+  base URLs, `{name}` atoms and leading `{endpoint}` URLs alike:
+  `https` binds anywhere, `http` binds only toward private or loopback
+  authorities, and cleartext to a public host is refused with a
+  distinct message naming the accepted classes. A leading `{name}`
+  variable's value is validated by `check_endpoint_var` rather than
+  re-parsed inline, so the two value classes share one check.
 - Caller-supplied `http` endpoints are confined to private and loopback
   hosts — loopback, RFC1918, link-local, CGNAT `100.64/10`,
-  `localhost`, `.localhost`, `.local`, `.internal`, `.lan` and
-  single-label names — so credential-bearing traffic cannot go
-  cleartext to a public address; `https` endpoints bind anywhere and
-  embedded credentials remain refused. Variables a target's template
-  does not name stay inert, so one shared vars map can feed several
-  targets, and trailing slashes on an `endpoint` value no longer yield
-  `//v1` paths.
+  `localhost`, `.localhost` and `.internal` — so credential-bearing
+  traffic cannot go cleartext to a public address; named private hosts
+  are trusted to the operator's own resolver, while spoofable classes
+  (mDNS `.local`, search-domain single labels, arbitrary `.lan` zones)
+  are not accepted. `https` endpoints bind anywhere and embedded
+  credentials remain refused. Variables a target's template does not
+  name stay inert, so one shared vars map can feed several targets, and
+  trailing slashes on an `endpoint` value no longer yield `//v1` paths.
 
 - `WireBridge::chat_stream` now creates one stream encoder and uses it for
   both the preamble and the rest of the stream. Responses streams therefore

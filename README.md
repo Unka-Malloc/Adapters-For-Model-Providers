@@ -114,7 +114,10 @@ privatemode's `local-proxy` region, …) declare `{name}`/`{endpoint}`
 placeholders instead of fixed addresses; bind them through
 `client.bind_provider_with(provider, protocol, region, auth, &vars)`
 with a vars map carrying the runtime `endpoint` URL and any
-per-resource atoms.
+per-resource atoms. `http` binds only toward private or loopback
+authorities (`localhost`, a loopback/private/link-local IP, or an
+`.internal` name resolved by the machine's own DNS); every endpoint —
+templated or literal — is refused in cleartext to a public host.
 
 Streaming, media, jobs and realtime follow the same pattern — see
 `src/api.rs` for the canonical types and each adapter's documented

@@ -64,11 +64,14 @@ impl ServiceDef {
     /// Values are host-supplied (account ids, resource names), so each
     /// must be a single URL atom: no `/ ? # @ :` or backslash (authority
     /// or path injection), no whitespace, no `..` (path escape). After
-    /// substitution the materialized URL must still be `https` and its
-    /// authority must match the template's declared host pattern —
-    /// `{name}` spans may expand, literal segments must not move — so a
-    /// host value can never redirect the request off the declared
-    /// endpoint. Checks fail closed with `Error::Protocol`.
+    /// substitution the materialized URL must be `https`, or `http`
+    /// toward a private/loopback authority (`localhost`, a
+    /// loopback/private/link-local IP, or an `.internal` name) — never
+    /// cleartext to a public host — and its authority must match the
+    /// template's declared host pattern: `{name}` spans may expand,
+    /// literal segments must not move, so a host value can never
+    /// redirect the request off the declared endpoint. Checks fail
+    /// closed with `Error::Protocol`.
     pub fn target_with(
         &self,
         provider: &ProviderId,
@@ -120,12 +123,7 @@ impl ServiceDef {
     ) -> Result<ServiceTarget, Error> {
         let url = url::Url::parse(base_url)
             .map_err(|e| Error::Protocol(format!("profile {} endpoint {e}", provider.as_str())))?;
-        if url.scheme() != "https" {
-            return Err(Error::Protocol(format!(
-                "profile {} endpoint must be https after substitution",
-                provider.as_str()
-            )));
-        }
+        check_endpoint_url(provider, &url)?;
         if !template_host_matches(self.base_url, &url) {
             return Err(Error::Protocol(format!(
                 "profile {} endpoint authority left its declared host",
@@ -147,6 +145,7 @@ impl ServiceDef {
         }
         let url = url::Url::parse(base_url)
             .map_err(|e| Error::Protocol(format!("profile {} endpoint {e}", provider.as_str())))?;
+        check_endpoint_url(provider, &url)?;
         self.build_target(provider, url)
     }
 
@@ -190,14 +189,34 @@ fn endpoint_host_is_private(url: &url::Url) -> bool {
             ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local()
         }
         Some(url::Host::Domain(domain)) => {
-            domain == "localhost"
-                || domain.ends_with(".localhost")
-                || domain.ends_with(".local")
-                || domain.ends_with(".internal")
-                || domain.ends_with(".lan")
-                || !domain.contains('.')
+            domain == "localhost" || domain.ends_with(".localhost") || domain.ends_with(".internal")
         }
         None => false,
+    }
+}
+
+/// The endpoint policy every materialization path shares: `https`
+/// anywhere; `http` only toward a private or loopback authority, so a
+/// credential-bearing request can never ride cleartext to a public
+/// address. Anything else is refused with a distinct message naming the
+/// accepted classes. Named hosts resolve through the operator's own DNS
+/// — `.internal` is trusted to the resolver the machine already obeys,
+/// while spoofable classes (mDNS `.local`, search-domain single labels,
+/// arbitrary `.lan` zones) are not.
+fn check_endpoint_url(provider: &ProviderId, url: &url::Url) -> Result<(), Error> {
+    match url.scheme() {
+        "https" => Ok(()),
+        "http" if endpoint_host_is_private(url) => Ok(()),
+        "http" => Err(Error::Protocol(format!(
+            "profile {} endpoint uses cleartext http to a public host — the \
+             endpoint must be https or a private/loopback authority \
+             (localhost, a loopback/private/link-local IP, or an .internal name)",
+            provider.as_str()
+        ))),
+        _ => Err(Error::Protocol(format!(
+            "profile {} endpoint must be an http(s) URL",
+            provider.as_str()
+        ))),
     }
 }
 
@@ -640,7 +659,13 @@ impl Client {
 
     /// [`Self::bind_provider`] with endpoint variables for profiles whose
     /// `base_url` is a per-resource template (`{name}` placeholders, e.g.
-    /// Azure resource names or Cloudflare account ids).
+    /// Azure resource names or Cloudflare account ids) — including the
+    /// local/self-hosted profiles whose leading `{endpoint}` variable
+    /// carries the whole endpoint URL supplied at runtime. `http` binds
+    /// only toward private or loopback authorities (`localhost`, a
+    /// loopback/private/link-local IP, or an `.internal` name); every
+    /// materialized endpoint — templated or literal — is refused in
+    /// cleartext to a public host.
     pub fn bind_provider_with(
         &self,
         provider: &str,

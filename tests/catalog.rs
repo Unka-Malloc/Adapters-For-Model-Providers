@@ -423,8 +423,16 @@ async fn endpoint_trailing_slash_does_not_double_the_path() {
 async fn http_endpoints_stay_on_private_hosts() {
     let (client, _) = client();
     // Cleartext endpoints are confined to hosts the operator addresses
-    // directly; TEST-NET-3 (203.0.113.0/24) stands in for a public IP.
-    for bad in ["http://203.0.113.10:8080", "http://8.8.8.8"] {
+    // directly; TEST-NET-3 (203.0.113.0/24) stands in for a public IP,
+    // and spoofable name classes — mDNS .local, search-domain single
+    // labels, arbitrary .lan zones — are refused alongside public IPs.
+    for bad in [
+        "http://203.0.113.10:8080",
+        "http://8.8.8.8",
+        "http://mlx.local",
+        "http://printer.lan",
+        "http://server",
+    ] {
         let vars = std::collections::BTreeMap::from([("endpoint", bad)]);
         match client.bind_provider_with("ollama", None, None, AuthKind::None, &vars) {
             Err(Error::Protocol(_)) => {}
@@ -432,15 +440,14 @@ async fn http_endpoints_stay_on_private_hosts() {
             Ok(_) => panic!("public http endpoint {bad:?} must fail, got Ok"),
         }
     }
-    // Loopback, RFC1918, CGNAT, and operator-local names all bind.
+    // Loopback, RFC1918, CGNAT, and operator-controlled names bind.
     for good in [
         "http://127.0.0.1:11434",
         "http://[::1]:11434",
         "http://192.168.1.5:11434",
         "http://100.64.1.2:8000",
-        "http://mlx.local",
+        "http://localhost:11434",
         "http://nas.internal",
-        "http://server",
     ] {
         let vars = std::collections::BTreeMap::from([("endpoint", good)]);
         client
