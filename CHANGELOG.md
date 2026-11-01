@@ -5,7 +5,33 @@ All notable changes to `a4mp` are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Changed
+
+- **Behavior change:** the builtin local-server profiles — `omlx`,
+  `mlx-serve`, `atomic-chat`, `ollama` (native and OpenAI-compatible
+  targets) and `lmstudio` — plus privatemode's `local-proxy` region no
+  longer carry compiled-in addresses. Their base URLs are
+  `{endpoint}`/`{endpoint}/v1` templates, so they bind through
+  `bind_provider_with` with an `endpoint` variable holding the runtime
+  URL; `bind_provider` on them now fails with `Error::Protocol` naming
+  `{endpoint}`.
+
 ### Fixed
+
+- `ServiceDef::target_with` now routes non-template base URLs through
+  the same post-checks as substituted templates (`https` mandate, host
+  anchoring); a leading `{name}` variable's value is validated by
+  `check_endpoint_var` rather than re-parsed inline, so the two value
+  classes share one check.
+- Caller-supplied `http` endpoints are confined to private and loopback
+  hosts — loopback, RFC1918, link-local, CGNAT `100.64/10`,
+  `localhost`, `.localhost`, `.local`, `.internal`, `.lan` and
+  single-label names — so credential-bearing traffic cannot go
+  cleartext to a public address; `https` endpoints bind anywhere and
+  embedded credentials remain refused. Variables a target's template
+  does not name stay inert, so one shared vars map can feed several
+  targets, and trailing slashes on an `endpoint` value no longer yield
+  `//v1` paths.
 
 - `WireBridge::chat_stream` now creates one stream encoder and uses it for
   both the preamble and the rest of the stream. Responses streams therefore
@@ -33,6 +59,12 @@ All notable changes to `a4mp` are recorded here. Versions follow
   end, and asserts `message_stop` stays last when usage follows `Finished`.
   A bridge-level test relays an OpenAI Chat-shaped canonical stream (no
   `PartFinished`) to an Anthropic client and checks block balancing.
+- Endpoint-template coverage parametrizes a `bind_provider_with` pass
+  over every converted local profile — `/v1` paths on chat surfaces,
+  the bare endpoint on Ollama's native dialect, privatemode's
+  region-selected `local-proxy` — plus trailing-slash normalization,
+  public-IP `http` refusal (TEST-NET-3), private-host `http`
+  acceptance, and shared vars maps carrying keys for sibling targets.
 
 ## [0.3.2] - 2026-10-25
 

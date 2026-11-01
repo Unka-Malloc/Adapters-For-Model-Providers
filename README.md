@@ -109,6 +109,13 @@ let output = adapter.chat(
 # }
 ```
 
+Templated and local profiles (`azure`, `ollama`, `lmstudio`, `omlx`,
+privatemode's `local-proxy` region, …) declare `{name}`/`{endpoint}`
+placeholders instead of fixed addresses; bind them through
+`client.bind_provider_with(provider, protocol, region, auth, &vars)`
+with a vars map carrying the runtime `endpoint` URL and any
+per-resource atoms.
+
 Streaming, media, jobs and realtime follow the same pattern — see
 `src/api.rs` for the canonical types and each adapter's documented
 coverage.

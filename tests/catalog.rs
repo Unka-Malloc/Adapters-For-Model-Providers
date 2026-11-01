@@ -354,13 +354,129 @@ async fn local_profiles_require_a_runtime_endpoint() {
 async fn local_profiles_bind_the_runtime_endpoint() {
     let (client, _) = client();
     let vars = std::collections::BTreeMap::from([("endpoint", "http://models.internal:8000")]);
+    // Every templated chat surface grows `/v1` on the caller's endpoint.
+    for (provider, protocol) in [
+        ("omlx", Protocol::OpenAiChatCompletions),
+        ("omlx", Protocol::OpenAiResponses),
+        ("mlx-serve", Protocol::OpenAiChatCompletions),
+        ("mlx-serve", Protocol::OpenAiResponses),
+        ("atomic-chat", Protocol::OpenAiChatCompletions),
+        ("lmstudio", Protocol::OpenAiChatCompletions),
+        ("ollama", Protocol::OpenAiChatCompletions),
+    ] {
+        let adapter = client
+            .bind_provider_with(
+                provider,
+                Some(protocol.clone()),
+                None,
+                AuthKind::None,
+                &vars,
+            )
+            .unwrap_or_else(|e| panic!("{provider}/{protocol:?} must bind: {e:?}"));
+        let url = &adapter.target().base_url;
+        assert_eq!(url.scheme(), "http", "{provider}");
+        assert_eq!(url.host_str(), Some("models.internal"), "{provider}");
+        assert_eq!(url.port(), Some(8000), "{provider}");
+        assert_eq!(url.path(), "/v1", "{provider}");
+    }
+    // Ollama's native dialect binds the bare endpoint, no `/v1` suffix.
     let adapter = client
-        .bind_provider_with("ollama", None, None, AuthKind::None, &vars)
+        .bind_provider_with(
+            "ollama",
+            Some(Protocol::Other("ollama".into())),
+            None,
+            AuthKind::None,
+            &vars,
+        )
+        .unwrap();
+    assert_eq!(
+        adapter.target().base_url.as_str(),
+        "http://models.internal:8000/"
+    );
+    // A region-selected template (privatemode's local proxy) binds too.
+    let adapter = client
+        .bind_provider_with(
+            "privatemode",
+            Some(Protocol::OpenAiChatCompletions),
+            Some("local-proxy"),
+            AuthKind::ApiKey,
+            &vars,
+        )
+        .unwrap();
+    assert_eq!(adapter.target().base_url.path(), "/v1");
+    assert_eq!(adapter.target().region.as_deref(), Some("local-proxy"));
+}
+
+#[tokio::test]
+async fn endpoint_trailing_slash_does_not_double_the_path() {
+    let (client, _) = client();
+    let vars = std::collections::BTreeMap::from([("endpoint", "http://10.0.0.8:8080/")]);
+    let adapter = client
+        .bind_provider_with("lmstudio", None, None, AuthKind::None, &vars)
         .unwrap();
     let url = &adapter.target().base_url;
-    assert_eq!(url.scheme(), "http");
-    assert_eq!(url.host_str(), Some("models.internal"));
-    assert_eq!(url.port(), Some(8000));
+    assert_eq!(url.path(), "/v1");
+    assert!(!url.path().contains("//"), "{url}");
+}
+
+#[tokio::test]
+async fn http_endpoints_stay_on_private_hosts() {
+    let (client, _) = client();
+    // Cleartext endpoints are confined to hosts the operator addresses
+    // directly; TEST-NET-3 (203.0.113.0/24) stands in for a public IP.
+    for bad in ["http://203.0.113.10:8080", "http://8.8.8.8"] {
+        let vars = std::collections::BTreeMap::from([("endpoint", bad)]);
+        match client.bind_provider_with("ollama", None, None, AuthKind::None, &vars) {
+            Err(Error::Protocol(_)) => {}
+            Err(e) => panic!("public http endpoint {bad:?} must fail with Protocol, got {e:?}"),
+            Ok(_) => panic!("public http endpoint {bad:?} must fail, got Ok"),
+        }
+    }
+    // Loopback, RFC1918, CGNAT, and operator-local names all bind.
+    for good in [
+        "http://127.0.0.1:11434",
+        "http://[::1]:11434",
+        "http://192.168.1.5:11434",
+        "http://100.64.1.2:8000",
+        "http://mlx.local",
+        "http://nas.internal",
+        "http://server",
+    ] {
+        let vars = std::collections::BTreeMap::from([("endpoint", good)]);
+        client
+            .bind_provider_with("ollama", None, None, AuthKind::None, &vars)
+            .unwrap_or_else(|e| panic!("private http endpoint {good:?} must bind: {e:?}"));
+    }
+    // https travels anywhere, public included.
+    let vars = std::collections::BTreeMap::from([("endpoint", "https://203.0.113.10:8443")]);
+    client
+        .bind_provider_with("ollama", None, None, AuthKind::None, &vars)
+        .unwrap();
+}
+
+#[tokio::test]
+async fn endpoint_vars_map_may_carry_sibling_target_keys() {
+    let (client, _) = client();
+    // One vars map shared across targets: keys naming placeholders the
+    // chosen target does not declare stay inert instead of failing.
+    let vars = std::collections::BTreeMap::from([
+        ("endpoint", "http://10.0.0.8:8080"),
+        ("resource", "myres"),
+        ("account_id", "acct9"),
+    ]);
+    let adapter = client
+        .bind_provider_with("lmstudio", None, None, AuthKind::None, &vars)
+        .unwrap();
+    assert_eq!(adapter.target().base_url.path(), "/v1");
+    // The reverse direction holds: an `endpoint` key does not disturb
+    // an atom-template bind such as azure's `{resource}`.
+    let adapter = client
+        .bind_provider_with("azure", None, None, AuthKind::ApiKey, &vars)
+        .unwrap();
+    assert_eq!(
+        adapter.target().base_url.as_str(),
+        "https://myres.openai.azure.com/openai/v1"
+    );
 }
 
 #[tokio::test]

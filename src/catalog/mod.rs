@@ -76,8 +76,14 @@ impl ServiceDef {
     ) -> Result<ServiceTarget, Error> {
         let mut resolved = self.base_url.to_owned();
         for (key, value) in vars {
+            let needle = format!("{{{key}}}");
+            // Variables meant for a sibling target stay inert: one vars
+            // map may be shared across every target a profile offers.
+            if !resolved.contains(&needle) {
+                continue;
+            }
             check_endpoint_var(provider, key, value, self.base_url)?;
-            resolved = resolved.replace(&format!("{{{key}}}"), value);
+            resolved = resolved.replace(&needle, value.trim_end_matches('/'));
         }
         if let Some(start) = resolved.find('{') {
             if let Some(end) = resolved[start..].find('}') {
@@ -89,21 +95,16 @@ impl ServiceDef {
             }
         }
         if !self.base_url.contains('{') {
-            return self.materialize(provider, &resolved);
+            return self.materialize_checked(provider, &resolved);
         }
-        if self.base_url.starts_with('{') {
+        if leading_var(self.base_url).is_some() {
             // A leading variable carries the URL itself: the caller chose
-            // the endpoint, so there is no declared host to anchor and no
-            // https mandate — the scheme just has to stay http(s).
+            // the endpoint, so there is no declared host to anchor. The
+            // caller's own value already passed check_endpoint_var; parse
+            // the substituted template once and build from it.
             let url = url::Url::parse(&resolved).map_err(|e| {
                 Error::Protocol(format!("profile {} endpoint {e}", provider.as_str()))
             })?;
-            if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
-                return Err(Error::Protocol(format!(
-                    "profile {} endpoint must resolve to an http(s) URL",
-                    provider.as_str()
-                )));
-            }
             return self.build_target(provider, url);
         }
         self.materialize_checked(provider, &resolved)
@@ -164,12 +165,49 @@ impl ServiceDef {
     }
 }
 
+/// The variable that opens a template (`{name}…`) carries the endpoint
+/// URL itself rather than an atom inside it.
+fn leading_var(template: &str) -> Option<&str> {
+    let rest = template.strip_prefix('{')?;
+    let end = rest.find('}')?;
+    Some(&rest[..end])
+}
+
+/// Is `url`'s host a private or loopback authority — a machine the
+/// operator addresses directly rather than a public endpoint? Plain
+/// `http` is confined to this class so a caller-supplied endpoint can
+/// never put credential-bearing traffic in cleartext on a public path;
+/// `https` is accepted everywhere.
+fn endpoint_host_is_private(url: &url::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Ipv4(ip)) => {
+            ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || (ip.octets()[0] == 100 && (ip.octets()[1] & 0xC0) == 0x40)
+        }
+        Some(url::Host::Ipv6(ip)) => {
+            ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local()
+        }
+        Some(url::Host::Domain(domain)) => {
+            domain == "localhost"
+                || domain.ends_with(".localhost")
+                || domain.ends_with(".local")
+                || domain.ends_with(".internal")
+                || domain.ends_with(".lan")
+                || !domain.contains('.')
+        }
+        None => false,
+    }
+}
+
 /// One endpoint variable's value class comes from its position in the
 /// template. A leading `{name}` carries the endpoint URL itself (local
 /// servers and host-managed gateways declare nothing else): the value
 /// must be a complete http(s) URL with a host and no embedded
-/// credentials. Any other variable is a single URL atom — an authority
-/// or path-structure character would let a host-supplied value redirect
+/// credentials, and `http` is confined to private or loopback hosts.
+/// Any other variable is a single URL atom — an authority or
+/// path-structure character would let a host-supplied value redirect
 /// the endpoint, and `..` lets a path variable walk out of it.
 fn check_endpoint_var(
     provider: &ProviderId,
@@ -177,13 +215,14 @@ fn check_endpoint_var(
     value: &str,
     template: &str,
 ) -> Result<(), Error> {
-    if template.starts_with(&format!("{{{key}}}")) {
+    if leading_var(template) == Some(key) {
         let clean = url::Url::parse(value)
             .map(|url| {
                 matches!(url.scheme(), "http" | "https")
                     && url.host_str().is_some()
                     && url.username().is_empty()
                     && url.password().is_none()
+                    && (url.scheme() == "https" || endpoint_host_is_private(&url))
             })
             .unwrap_or(false);
         if !clean {
