@@ -298,7 +298,7 @@ PREFLIGHT_CASES = [
         200,
         {},
         {},
-        True, "warn", "partially verified",
+        True, "unverified", "partially verified",
     ),
     (
         "unprotected default branch refuses",
@@ -322,7 +322,7 @@ PREFLIGHT_CASES = [
         {"protection_rules": REVIEWERS,
          "deployment_branch_policy": BRANCH_POLICY},
         {"branch": (403, None)},
-        True, "warn", "partially verified",
+        True, "unverified", "partially verified",
     ),
     (
         "incomplete policy enumeration warns",
@@ -330,7 +330,7 @@ PREFLIGHT_CASES = [
         {"protection_rules": REVIEWERS,
          "deployment_branch_policy": CUSTOM_POLICY},
         {"policies": (200, False, ["main"])},
-        True, "warn", "partially verified",
+        True, "unverified", "partially verified",
     ),
     (
         "404 proven absent refuses on live",
@@ -342,35 +342,35 @@ PREFLIGHT_CASES = [
         "404 proven absent warns on rehearsal",
         404, None,
         {"listing": (200, True, ["staging"])},
-        False, "warn", "no `release` environment",
+        False, "refuse", "no `release` environment",
     ),
     (
         "404 listed-but-unreadable warns",
         404, None,
         {"listing": (200, True, ["release", "staging"])},
-        True, "warn", "unreadable",
+        True, "unverified", "unreadable",
     ),
     (
         "404 with incomplete listing warns — never absence",
         404, None,
         {"listing": (200, False, ["staging"])},
-        True, "warn", "could not be proven",
+        True, "unverified", "could not be proven",
     ),
     (
         "404 with unreadable listing warns",
         404, None,
         {"listing": (403, False, [])},
-        True, "warn", "could not be proven",
+        True, "unverified", "could not be proven",
     ),
     ("401 warns live without the reassurance clause",
-     401, None, {}, True, "warn", "HTTP 401"),
-    ("403 warns", 403, None, {}, False, "warn", "still applies"),
-    ("transport failure warns", 0, None, {}, True, "warn", "transport"),
-    ("an unexpected status warns", 500, None, {}, True, "warn", "HTTP 500"),
+     401, None, {}, True, "unverified", "HTTP 401"),
+    ("403 warns", 403, None, {}, False, "unverified", "still applies"),
+    ("transport failure warns", 0, None, {}, True, "unverified", "transport"),
+    ("an unexpected status warns", 500, None, {}, True, "unverified", "HTTP 500"),
     (
         "an unreadable 200 payload warns",
         200, None, {},
-        True, "warn", "unreadable payload",
+        True, "unverified", "unreadable payload",
     ),
 ]
 
@@ -437,7 +437,7 @@ class PreflightCommandTest(unittest.TestCase):
             "GH_TOKEN": "t",
             "GITHUB_REPOSITORY": "o/r",
             "DEFAULT_BRANCH": "main",
-            "BIND_MODE": "live" if live else "rehearsal",
+            "BIND_MODE": "live" if live else "dry-run",
         }
         if opt_in:
             environ["ALLOW_UNVERIFIED_RELEASE_ENV"] = opt_in

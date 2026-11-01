@@ -1028,8 +1028,10 @@ def preflight_verdict(
     /environments walk, "policies" is (status, complete, names) of a
     paginated deployment-branch-policies walk, and "branch" is
     (status, protected) of the default branch. Returns (verdict,
-    message); verdict is "pass", "warn" or "refuse" — the caller maps
-    refuse to a hard stop on live and a loud warning on rehearsal."""
+    message); verdict is "pass", "unverified" or "refuse" — the caller
+    maps refuse and live unverified to a hard stop, and every other
+    combination to a warning. `live` only steers the message: the
+    job-entry reassurance is true only where the job will run."""
     if status == 404:
         # Absence is conclusive only from a complete, readable
         # enumeration: a lone 404 cannot tell a missing environment from
@@ -1037,12 +1039,11 @@ def preflight_verdict(
         list_status, complete, names = evidence.get("listing", (0, False, []))
         if list_status == 200 and complete:
             if "release" not in names:
-                verdict = "refuse" if live else "warn"
-                return verdict, (
+                return "refuse", (
                     "this repository has no `release` environment — GitHub "
                     "would create an unprotected one when the release job "
                     "starts, silently removing the approval gate")
-            return "warn", (
+            return "unverified", (
                 "the environments listing names `release` yet its own "
                 "endpoint answered HTTP 404 — treated as unreadable"
                 + ("" if live else
@@ -1052,20 +1053,20 @@ def preflight_verdict(
             "the environments listing could not be read to completion"
             if list_status == 200
             else f"listing: {status_detail(list_status)}")
-        return "warn", (
+        return "unverified", (
             f"the `release` environment answered HTTP 404 and absence could "
             f"not be proven ({detail})"
             + ("" if live else
                "; the environment's own protection still applies at job "
                "entry"))
     if status != 200:
-        return "warn", (
+        return "unverified", (
             f"cannot read the `release` environment's settings with this "
             f"token ({status_detail(status)})"
             + ("" if live else "; the environment's own "
                "protection still applies at job entry"))
     if not isinstance(env, dict):
-        return "warn", (
+        return "unverified", (
             "the `release` environment returned an unreadable payload"
             + ("" if live else
                "; the environment's own protection still applies at job "
@@ -1129,7 +1130,7 @@ def preflight_verdict(
                         f"default branch `{default}` deploy "
                         f"(rules: {', '.join(map(str, names)) or 'none'})")
     if skipped:
-        return "warn", (
+        return "unverified", (
             f"release environment partially verified — unverified: "
             f"{'; '.join(skipped)} — confirm them under Settings → "
             "Environments → release")
@@ -1150,11 +1151,11 @@ def cmd_preflight_env(args: argparse.Namespace) -> int:
     default = os.environ.get("DEFAULT_BRANCH")
     if not default:
         raise TrainError("preflight-env needs DEFAULT_BRANCH")
-    # The fail-closed branch must be the default: only a positively
-    # spelled rehearsal is non-live, so an unset or misspelled BIND_MODE
-    # keeps the strict semantics instead of silently restoring
-    # warn-only behavior.
-    live = os.environ.get("BIND_MODE") != "rehearsal"
+    # The fail-closed branch must be the default: only the mode the
+    # producer actually emits for a rehearsal takes the warning path,
+    # so an unset or misspelled BIND_MODE keeps the strict semantics
+    # instead of silently restoring warn-only behavior.
+    live = os.environ.get("BIND_MODE") != "dry-run"
     status, env, _ = gh_get("/environments/release")
     evidence: dict[str, tuple] = {}
     for need in needed_evidence(status, env):
@@ -1188,7 +1189,7 @@ def cmd_preflight_env(args: argparse.Namespace) -> int:
         print(f"::error::rehearsal — {message} "
               f"(a live run stops here) — {ENV_GUIDE}")
         return 0
-    if verdict == "warn":
+    if verdict == "unverified":
         # A live bind fails closed on anything it cannot positively
         # verify: an environment that may be absent would be auto-created
         # unprotected, silently dropping the approval gate. The escape
