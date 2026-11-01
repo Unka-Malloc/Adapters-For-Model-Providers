@@ -1019,6 +1019,7 @@ def preflight_verdict(
     evidence: dict,
     default: str,
     live: bool,
+    opt_in: bool = False,
 ) -> tuple[str, str]:
     """The `release` environment decision from fetched evidence alone —
     no I/O, so every row of the contract is exercised from a table.
@@ -1029,9 +1030,17 @@ def preflight_verdict(
     paginated deployment-branch-policies walk, and "branch" is
     (status, protected) of the default branch. Returns (verdict,
     message); verdict is "pass", "unverified" or "refuse" — the caller
-    maps refuse and live unverified to a hard stop, and every other
-    combination to a warning. `live` only steers the message: the
-    job-entry reassurance is true only where the job will run."""
+    maps refuse and live unverified without the opt-in to a hard stop,
+    and every other combination to a warning. The job-entry reassurance
+    is rendered only where the job will actually run: a rehearsal
+    proceeds, and a live unverified proceeds only by the recorded
+    opt-in."""
+    # The clause is true exactly where the release job will enter the
+    # environment: every rehearsal, and a live bind only when the
+    # recorded exception lets it proceed.
+    entry = ("" if live and not opt_in else
+             "; the environment's own protection still applies at job "
+             "entry")
     if status == 404:
         # Absence is conclusive only from a complete, readable
         # enumeration: a lone 404 cannot tell a missing environment from
@@ -1046,31 +1055,22 @@ def preflight_verdict(
             return "unverified", (
                 "the environments listing names `release` yet its own "
                 "endpoint answered HTTP 404 — treated as unreadable"
-                + ("" if live else
-                   "; the environment's own protection still applies at "
-                   "job entry"))
+                + entry)
         detail = (
             "the environments listing could not be read to completion"
             if list_status == 200
             else f"listing: {status_detail(list_status)}")
         return "unverified", (
             f"the `release` environment answered HTTP 404 and absence could "
-            f"not be proven ({detail})"
-            + ("" if live else
-               "; the environment's own protection still applies at job "
-               "entry"))
+            f"not be proven ({detail})" + entry)
     if status != 200:
         return "unverified", (
             f"cannot read the `release` environment's settings with this "
-            f"token ({status_detail(status)})"
-            + ("" if live else "; the environment's own "
-               "protection still applies at job entry"))
+            f"token ({status_detail(status)})" + entry)
     if not isinstance(env, dict):
         return "unverified", (
             "the `release` environment returned an unreadable payload"
-            + ("" if live else
-               "; the environment's own protection still applies at job "
-               "entry"))
+            + entry)
 
     skipped: list[str] = []
     # Key absent → a facet this payload does not expose (skipped, then
@@ -1142,10 +1142,10 @@ def cmd_preflight_env(args: argparse.Namespace) -> int:
     """The publish gate's thin client: fetch the evidence the payload
     calls for, hand it to the pure verdict, render the result. A refusal
     exits 1 on a live bind and lands as an error annotation on a
-    rehearsal; a warn verdict is a hard stop on a live bind too, unless
-    the operator recorded ALLOW_UNVERIFIED_RELEASE_ENV=1 — the opt-in
-    names itself in the warning — while rehearsals always warn and
-    proceed."""
+    rehearsal; an unverified verdict is likewise a hard stop on a live
+    bind unless the operator recorded ALLOW_UNVERIFIED_RELEASE_ENV=1 —
+    the opt-in names itself in the warning — while rehearsals always
+    warn and proceed."""
     if not os.environ.get("GH_TOKEN") or not os.environ.get("GITHUB_REPOSITORY"):
         raise TrainError("preflight-env needs GH_TOKEN and GITHUB_REPOSITORY")
     default = os.environ.get("DEFAULT_BRANCH")
@@ -1178,7 +1178,9 @@ def cmd_preflight_env(args: argparse.Namespace) -> int:
             evidence["policies"] = (
                 policies_status, complete,
                 [row.get("name") for row in rows if isinstance(row, dict)])
-    verdict, message = preflight_verdict(status, env, evidence, default, live)
+    opt_in = os.environ.get("ALLOW_UNVERIFIED_RELEASE_ENV") == "1"
+    verdict, message = preflight_verdict(
+        status, env, evidence, default, live, opt_in)
     if verdict == "refuse":
         report(f"release env preflight: REFUSED — {message}")
         if live:
@@ -1192,25 +1194,29 @@ def cmd_preflight_env(args: argparse.Namespace) -> int:
     if verdict == "unverified":
         # A live bind fails closed on anything it cannot positively
         # verify: an environment that may be absent would be auto-created
-        # unprotected, silently dropping the approval gate. The escape
-        # hatch is one explicit, recorded operator act — the repository
-        # variable ALLOW_UNVERIFIED_RELEASE_ENV=1 — never a silent warn;
-        # rehearsals warn unconditionally as the early signal they exist
-        # to provide.
-        opt_in = os.environ.get("ALLOW_UNVERIFIED_RELEASE_ENV") == "1"
+        # unprotected, silently dropping the approval gate. Remedies are
+        # a step token that can read the environment, or one recorded
+        # operator act — the repository variable
+        # ALLOW_UNVERIFIED_RELEASE_ENV=1 — never a silent warn; rehearsals
+        # warn unconditionally as the early signal they exist to provide.
         if live and not opt_in:
             report(f"release env preflight: REFUSED — unverified: {message}")
             print(f"::error::{message} — live publication could not "
                   f"positively verify the `release` environment, so the "
-                  f"run stops here; set the repository variable "
-                  f"ALLOW_UNVERIFIED_RELEASE_ENV=1 to proceed unverified "
-                  f"— {ENV_GUIDE}")
+                  f"run stops here; supply a token with Environments "
+                  f"read as this step's GH_TOKEN, or set the repository "
+                  f"variable ALLOW_UNVERIFIED_RELEASE_ENV=1 to proceed "
+                  f"unverified — {ENV_GUIDE}")
             return 1
-        suffix = (
-            " — proceeding unverified by operator opt-in "
-            "(ALLOW_UNVERIFIED_RELEASE_ENV=1)" if live
-            else " — a live run stops here unless "
-                 "ALLOW_UNVERIFIED_RELEASE_ENV=1 is recorded")
+        if live:
+            suffix = (" — proceeding unverified by operator opt-in "
+                      "(ALLOW_UNVERIFIED_RELEASE_ENV=1)")
+        elif opt_in:
+            suffix = (" — a live run would proceed unverified by the "
+                      "recorded opt-in (ALLOW_UNVERIFIED_RELEASE_ENV=1)")
+        else:
+            suffix = (" — a live run stops here unless "
+                      "ALLOW_UNVERIFIED_RELEASE_ENV=1 is recorded")
         print(f"::warning::{message}{suffix}")
         report(f"release env preflight: warned — {message}{suffix}")
         return 0

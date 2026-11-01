@@ -16,18 +16,19 @@
 # branch, and bind crates.io Trusted Publishing to that environment —
 # the environment, not the in-file ref check below (kept as a second
 # lock), is what confines a dispatch's reach. That shape is an operator
-# prerequisite the gate preflights on release-bound runs: a readable
-# environment without required reviewers or with an all-branches deploy
-# rule is refused outright, and a `release` environment missing from a
-# complete, readable environments listing is refused on a live bind —
-# absence is proven by enumeration, never inferred, since a lone 404 can
-# be a permission wall. Anything the gate cannot positively verify is
-# unverified: a live bind fails closed there unless the operator records
-# the ALLOW_UNVERIFIED_RELEASE_ENV=1 repository variable — an explicit,
-# logged opt-in — while rehearsals always warn, since a workflow token
-# has no Administration scope and the real enforcement stays server-side:
-# GitHub applies the environment's own protection when the release job
-# enters it. To release manually,
+# prerequisite the gate preflights on release-bound runs, under one
+# decision matrix: a refusal is what the evidence can prove — a
+# `release` environment absent from a complete, readable listing (GitHub
+# would auto-create one unprotected, silently removing the approval
+# gate), no required reviewers, or an all-branches deploy rule — and it
+# binds at every mode: a live bind stops, a rehearsal lands an error
+# annotation and continues. Anything the evidence cannot positively
+# verify is 'unverified': repository read access normally satisfies the
+# endpoints, so an unreadable answer is the exceptional case — a live
+# bind fails closed there unless a step token with Environments read is
+# supplied or the operator records the ALLOW_UNVERIFIED_RELEASE_ENV=1
+# repository variable (a logged exception, not a setting to keep), and
+# a rehearsal warns and continues. To release manually,
 # dispatch `verify.yml` on the default branch instead; a live
 # (non-rehearsal) run flows into this pipeline and still meets the
 # approval gate.
@@ -282,21 +283,21 @@ jobs:
           sparse-checkout: .github
           persist-credentials: false
 
-      # Runs on every bound gate run — rehearsals get the same early
-      # warning. The helper refuses only what it can prove: a `release`
-      # environment absent from a complete, readable environments
-      # listing (GitHub would auto-create one unprotected, silently
-      # removing the approval gate), no required reviewers, or an
-      # all-branches deployment rule — refusals bind at every mode.
-      # Repository read access normally satisfies both endpoints, so an
-      # unreadable answer is the exceptional, permission-limited case;
-      # it counts as 'unverified' and a live bind fails closed there —
-      # a possibly-absent environment would proceed unprotected — unless
-      # the operator records the ALLOW_UNVERIFIED_RELEASE_ENV=1
-      # repository variable, an exception the step names in the log and
-      # step summary, not a setting to keep around. Rehearsals always
-      # warn instead of stopping; the environment's own protection still
-      # applies server-side at job entry.
+      # Runs on every bound gate run under the same matrix as the file
+      # header: a proven refusal — a `release` environment absent from a
+      # complete, readable listing (GitHub would auto-create one
+      # unprotected, silently removing the approval gate), no required
+      # reviewers, or an all-branches deployment rule — stops a live
+      # bind and lands as an error annotation on a rehearsal, which
+      # continues either way. Repository read access normally satisfies
+      # the endpoints; an unreadable answer is the exceptional,
+      # permission-limited case and counts as 'unverified': a live bind
+      # fails closed there — a possibly-absent environment would
+      # proceed unprotected — unless a step token with Environments read
+      # is supplied or the operator records the
+      # ALLOW_UNVERIFIED_RELEASE_ENV=1 repository variable, a logged
+      # exception the step names in the log and step summary, not a
+      # setting to keep around; a rehearsal warns and continues.
       - name: Preflight the release environment
         if: steps.load.outputs.release == 'true'
         env:

@@ -339,7 +339,7 @@ PREFLIGHT_CASES = [
         True, "refuse", "no `release` environment",
     ),
     (
-        "404 proven absent warns on rehearsal",
+        "404 proven absent refuses on rehearsal too",
         404, None,
         {"listing": (200, True, ["staging"])},
         False, "refuse", "no `release` environment",
@@ -362,13 +362,16 @@ PREFLIGHT_CASES = [
         {"listing": (403, False, [])},
         True, "unverified", "could not be proven",
     ),
-    ("401 warns live without the reassurance clause",
+    ("401 is unverified on live",
      401, None, {}, True, "unverified", "HTTP 401"),
-    ("403 warns", 403, None, {}, False, "unverified", "still applies"),
-    ("transport failure warns", 0, None, {}, True, "unverified", "transport"),
-    ("an unexpected status warns", 500, None, {}, True, "unverified", "HTTP 500"),
+    ("403 is unverified on rehearsal",
+     403, None, {}, False, "unverified", "still applies"),
+    ("transport failure is unverified",
+     0, None, {}, True, "unverified", "transport"),
+    ("an unexpected status is unverified",
+     500, None, {}, True, "unverified", "HTTP 500"),
     (
-        "an unreadable 200 payload warns",
+        "an unreadable 200 payload is unverified",
         200, None, {},
         True, "unverified", "unreadable payload",
     ),
@@ -377,10 +380,13 @@ PREFLIGHT_CASES = [
 
 class PreflightVerdictTest(unittest.TestCase):
     """The publish gate's environment decision is pure: an HTTP status
-    and its fetched evidence go in, a verdict comes out — refuse only on
-    what the answer can prove (a missing environment auto-creates
-    unprotected; a misconfigured one removes the approval gate), warn on
-    everything a scope-less token cannot read."""
+    and its fetched evidence go in, a verdict comes out — 'refuse' only
+    on what the answer can prove (a missing environment auto-creates
+    unprotected; a misconfigured one removes the approval gate) and it
+    binds at every mode, 'unverified' on everything the evidence cannot
+    positively establish, 'pass' on a fully verified shape. On live,
+    unverified messages omit the job-entry reassurance because the job
+    never enters the environment."""
 
     def test_every_contract_row(self):
         for name, status, env, evidence, live, verdict, fragment in \
@@ -390,6 +396,8 @@ class PreflightVerdictTest(unittest.TestCase):
                     status, env, evidence, "main", live)
                 self.assertEqual(got, verdict, message)
                 self.assertIn(fragment, message)
+                if got == "unverified" and live:
+                    self.assertNotIn("still applies at job entry", message)
 
 
 class PreflightFetchTest(unittest.TestCase):
@@ -432,13 +440,14 @@ class PreflightCommandTest(unittest.TestCase):
     recorded the ALLOW_UNVERIFIED_RELEASE_ENV=1 opt-in; the opt-in never
     exempts a proven refusal. Rehearsals always warn and continue."""
 
-    def run_preflight(self, live, opt_in, status, env, listing=None):
+    def run_preflight(self, mode, opt_in, status, env, listing=None):
         environ = {
             "GH_TOKEN": "t",
             "GITHUB_REPOSITORY": "o/r",
             "DEFAULT_BRANCH": "main",
-            "BIND_MODE": "live" if live else "dry-run",
         }
+        if mode is not None:
+            environ["BIND_MODE"] = mode
         if opt_in:
             environ["ALLOW_UNVERIFIED_RELEASE_ENV"] = opt_in
         previous_get, previous_page = train.gh_get, train.gh_paginated
@@ -455,30 +464,49 @@ class PreflightCommandTest(unittest.TestCase):
         return rc, out.getvalue()
 
     def test_live_fails_closed_on_unverified(self):
-        rc, out = self.run_preflight(True, None, 403, None)
+        rc, out = self.run_preflight("live", None, 403, None)
         self.assertEqual(rc, 1)
         self.assertIn("::error::", out)
+        self.assertIn("ALLOW_UNVERIFIED_RELEASE_ENV", out)
 
     def test_rehearsal_warns_on_unverified(self):
-        rc, out = self.run_preflight(False, None, 403, None)
+        rc, out = self.run_preflight("dry-run", None, 403, None)
         self.assertEqual(rc, 0)
         self.assertIn("::warning::", out)
         self.assertIn("a live run stops here unless "
                       "ALLOW_UNVERIFIED_RELEASE_ENV=1", out)
 
+    def test_mode_defaults_to_strict(self):
+        # An unset or misspelled BIND_MODE keeps live semantics — the
+        # warning path only exists for the producer's own "dry-run".
+        for mode in (None, "rehearsal", "DRY-RUN"):
+            with self.subTest(mode):
+                rc, _ = self.run_preflight(mode, None, 403, None)
+                self.assertEqual(rc, 1)
+
     def test_opt_in_exempts_only_unverified(self):
-        rc, out = self.run_preflight(True, "1", 403, None)
+        rc, out = self.run_preflight("live", "1", 403, None)
         self.assertEqual(rc, 0)
         self.assertIn("proceeding unverified by operator opt-in", out)
-        self.assertEqual(self.run_preflight(True, "yes", 403, None)[0], 1)
+        rc, out = self.run_preflight("dry-run", "1", 403, None)
+        self.assertEqual(rc, 0)
+        self.assertIn("recorded opt-in", out)
+        self.assertNotIn("stops here unless", out)
+        self.assertEqual(self.run_preflight("live", "yes", 403, None)[0], 1)
         # A proven refusal — a complete listing without `release` — is
         # never exempted by the opt-in.
         self.assertEqual(
-            self.run_preflight(True, "1", 404, None, ["ci"])[0], 1)
+            self.run_preflight("live", "1", 404, None, ["ci"])[0], 1)
+
+    def test_rehearsal_annotates_refusal_without_stopping(self):
+        rc, out = self.run_preflight("dry-run", None, 404, None, ["ci"])
+        self.assertEqual(rc, 0)
+        self.assertIn("::error::rehearsal", out)
+        self.assertIn("a live run stops here", out)
 
     def test_verified_environment_passes(self):
         rc, _ = self.run_preflight(
-            True, None, 200,
+            "live", None, 200,
             {"protection_rules": [{"type": "required_reviewers",
                                    "reviewers": [{"id": 1}]}],
              "deployment_branch_policy": {"protected_branches": False,
