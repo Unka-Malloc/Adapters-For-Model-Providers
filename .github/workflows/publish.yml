@@ -288,15 +288,15 @@ jobs:
       # listing (GitHub would auto-create one unprotected, silently
       # removing the approval gate), no required reviewers, or an
       # all-branches deployment rule — refusals bind at every mode.
-      # Everything it cannot positively verify is 'unverified': a live
-      # bind fails closed there — a possibly-absent environment would
-      # proceed unprotected — unless the operator records the
-      # ALLOW_UNVERIFIED_RELEASE_ENV=1 repository variable, an opt-in
-      # the step names in the log and step summary; rehearsals always
-      # warn instead of stopping. A workflow token has no
-      # Administration scope, so unverifiable is the common case and
-      # the environment's own server-side protection still applies at
-      # job entry.
+      # Repository read access normally satisfies both endpoints, so an
+      # unreadable answer is the exceptional, permission-limited case;
+      # it counts as 'unverified' and a live bind fails closed there —
+      # a possibly-absent environment would proceed unprotected — unless
+      # the operator records the ALLOW_UNVERIFIED_RELEASE_ENV=1
+      # repository variable, an exception the step names in the log and
+      # step summary, not a setting to keep around. Rehearsals always
+      # warn instead of stopping; the environment's own protection still
+      # applies server-side at job entry.
       - name: Preflight the release environment
         if: steps.load.outputs.release == 'true'
         env:

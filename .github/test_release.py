@@ -8,7 +8,9 @@ cargo_metadata read is stubbed with fabricated workspace data.
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import os
 import pathlib
 import tempfile
@@ -360,7 +362,8 @@ PREFLIGHT_CASES = [
         {"listing": (403, False, [])},
         True, "warn", "could not be proven",
     ),
-    ("401 warns", 401, None, {}, True, "warn", "still applies"),
+    ("401 warns live without the reassurance clause",
+     401, None, {}, True, "warn", "HTTP 401"),
     ("403 warns", 403, None, {}, False, "warn", "still applies"),
     ("transport failure warns", 0, None, {}, True, "warn", "transport"),
     ("an unexpected status warns", 500, None, {}, True, "warn", "HTTP 500"),
@@ -444,23 +447,44 @@ class PreflightCommandTest(unittest.TestCase):
             200, [{"name": name} for name in (listing or [])], True)
         self.addCleanup(setattr, train, "gh_get", previous_get)
         self.addCleanup(setattr, train, "gh_paginated", previous_page)
-        with unittest.mock.patch.dict(os.environ, environ, clear=True):
-            return train.cmd_preflight_env(
+        out = io.StringIO()
+        with unittest.mock.patch.dict(os.environ, environ, clear=True), \
+                contextlib.redirect_stdout(out):
+            rc = train.cmd_preflight_env(
                 train.parser().parse_args(["preflight-env"]))
+        return rc, out.getvalue()
 
     def test_live_fails_closed_on_unverified(self):
-        self.assertEqual(self.run_preflight(True, None, 403, None), 1)
+        rc, out = self.run_preflight(True, None, 403, None)
+        self.assertEqual(rc, 1)
+        self.assertIn("::error::", out)
 
     def test_rehearsal_warns_on_unverified(self):
-        self.assertEqual(self.run_preflight(False, None, 403, None), 0)
+        rc, out = self.run_preflight(False, None, 403, None)
+        self.assertEqual(rc, 0)
+        self.assertIn("::warning::", out)
+        self.assertIn("a live run stops here unless "
+                      "ALLOW_UNVERIFIED_RELEASE_ENV=1", out)
 
     def test_opt_in_exempts_only_unverified(self):
-        self.assertEqual(self.run_preflight(True, "1", 403, None), 0)
-        self.assertEqual(self.run_preflight(True, "yes", 403, None), 1)
+        rc, out = self.run_preflight(True, "1", 403, None)
+        self.assertEqual(rc, 0)
+        self.assertIn("proceeding unverified by operator opt-in", out)
+        self.assertEqual(self.run_preflight(True, "yes", 403, None)[0], 1)
         # A proven refusal — a complete listing without `release` — is
         # never exempted by the opt-in.
         self.assertEqual(
-            self.run_preflight(True, "1", 404, None, ["ci"]), 1)
+            self.run_preflight(True, "1", 404, None, ["ci"])[0], 1)
+
+    def test_verified_environment_passes(self):
+        rc, _ = self.run_preflight(
+            True, None, 200,
+            {"protection_rules": [{"type": "required_reviewers",
+                                   "reviewers": [{"id": 1}]}],
+             "deployment_branch_policy": {"protected_branches": False,
+                                          "custom_branch_policies": True}},
+            ["main"])
+        self.assertEqual(rc, 0)
 
 
 if __name__ == "__main__":
