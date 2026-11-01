@@ -25,10 +25,13 @@
 # annotation and continues. Anything the evidence cannot positively
 # verify is 'unverified': repository read access normally satisfies the
 # endpoints, so an unreadable answer is the exceptional case — a live
-# bind fails closed there unless a step token with Environments read is
-# supplied or the operator records the ALLOW_UNVERIFIED_RELEASE_ENV=1
-# repository variable (a logged exception, not a setting to keep), and
-# a rehearsal warns and continues. To release manually,
+# bind fails closed there unless a token with Environments read is
+# stored in the RELEASE_ENV_READ_TOKEN secret or the operator records
+# the ALLOW_UNVERIFIED_RELEASE_ENV=1 repository variable. The variable
+# is a logged exception for cases where the environment's existence is
+# itself proven, never a cover for a proven refusal or a possibly
+# absent environment — and not a setting to keep around; a rehearsal
+# warns and continues. To release manually,
 # dispatch `verify.yml` on the default branch instead; a live
 # (non-rehearsal) run flows into this pipeline and still meets the
 # approval gate.
@@ -301,7 +304,14 @@ jobs:
       - name: Preflight the release environment
         if: steps.load.outputs.release == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          # The positive-verification seam: an operator who wants the
+          # gate to actually read environment settings stores a token
+          # with Environments read in the RELEASE_ENV_READ_TOKEN secret;
+          # without it the workflow token is used and unreadable answers
+          # stay 'unverified'. The fallback is declarative — no stored
+          # secret is required for the normal path.
+          GH_TOKEN:
+            ${{ secrets.RELEASE_ENV_READ_TOKEN || github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_API_URL: ${{ github.api_url }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}

@@ -6,12 +6,12 @@ engine = "release-engine"
 version = "0.1.0"
 
 [source]
-templates = "sha256:36d062d55eca22251aad09bd23ade08e0380f3bb68a03f36e934dcdfdfd8d11b"
+templates = "sha256:3bf8251a516414a44a36179bafba871b4751767a9876a70d7b74680df6025f32"
 declaration = "sha256:adec892ff568f875dd3e69e1ef30d69aa1801844c3b7efc0e9fbea9d6439e345"
 
 [outputs]
 ".github/workflows/verify.yml" = "sha256:1bb10c02769cb773695aaa22310b72033cac67ae7a7129abb60740455152a556"
-".github/workflows/publish.yml" = "sha256:f220e13e7d4d8513c1fe097728b39d26d443e7e986e763ad27c4d247d8addb74"
+".github/workflows/publish.yml" = "sha256:b044b6b154a010bee59e018cf4916c1cacc3844b53cd09f06e511700ece86eba"
 ".github/workflows/ci.yml" = "sha256:a611cb386db79dbad54ad54df05032c9d6bef85ced2875445263fa6ed7bb4e7d"
-".github/release.py" = "sha256:e5a16aaa876c5a0522cbe47bf8ce3a488e6fa885ec5f774804bfc97b9ddd5c7e"
-".github/test_release.py" = "sha256:ebbdd56bb22378b389d11bf31c5258da9de45f4ab6efc70813fcf61612e87889"
+".github/release.py" = "sha256:b5d616a15ec0ae64e16513c7bd80f1a7c49a7e2647607fd401a256a3838f78db"
+".github/test_release.py" = "sha256:9f6346049b54719be442f0acd1d99c726290ad18b83ef8c3c4f4f8215d32396e"

@@ -906,11 +906,15 @@ def cmd_set_version(args: argparse.Namespace) -> int:
 # are the exceptional case; anything the gate cannot positively verify
 # is 'unverified' — a rehearsal annotates it and proceeds (the job-entry
 # check is server-side anyway), while a live bind fails closed: a
-# possibly absent environment would run unprotected. The recorded
-# operator exception is the repository variable
-# ALLOW_UNVERIFIED_RELEASE_ENV=1, which exempts only the unverified
-# branch — never a proven refusal — and is named in the log and step
-# summary when it fires.
+# possibly absent environment would run unprotected. Remedies for a
+# live unverified stop are a token with Environments read stored in the
+# RELEASE_ENV_READ_TOKEN secret (the step binds GH_TOKEN to it or falls
+# back to github.token), or the recorded operator exception — the
+# repository variable ALLOW_UNVERIFIED_RELEASE_ENV=1 — which exempts
+# only unverified answers where the environment's existence is itself
+# proven; it can never cover a proven refusal, and it can never wave a
+# possibly absent environment into existence. Either remedy is named in
+# the log and step summary when it fires.
 
 ENV_GUIDE = ("required reviewers plus a deployment-branch rule limited to "
              "the default branch — create it under Settings → Environments → "
@@ -1133,7 +1137,7 @@ def preflight_verdict(
         return "unverified", (
             f"release environment partially verified — unverified: "
             f"{'; '.join(skipped)} — confirm them under Settings → "
-            "Environments → release")
+            "Environments → release" + entry)
     return "pass", ("required reviewers and a bounded deployment-branch "
                     "rule are in place")
 
@@ -1199,14 +1203,34 @@ def cmd_preflight_env(args: argparse.Namespace) -> int:
         # operator act — the repository variable
         # ALLOW_UNVERIFIED_RELEASE_ENV=1 — never a silent warn; rehearsals
         # warn unconditionally as the early signal they exist to provide.
+        # The opt-in cannot wave the catastrophic case it exists beside:
+        # when existence itself is unproven, a possibly-absent
+        # environment would be auto-created unprotected. Existence is
+        # proven by a 200 environment payload, or by a complete listing
+        # that names `release` while its endpoint says 404.
+        list_status, complete, names = evidence.get(
+            "listing", (0, False, []))
+        existence_proven = status == 200 or (
+            status == 404 and list_status == 200 and complete
+            and "release" in names)
         if live and not opt_in:
             report(f"release env preflight: REFUSED — unverified: {message}")
             print(f"::error::{message} — live publication could not "
                   f"positively verify the `release` environment, so the "
-                  f"run stops here; supply a token with Environments "
-                  f"read as this step's GH_TOKEN, or set the repository "
-                  f"variable ALLOW_UNVERIFIED_RELEASE_ENV=1 to proceed "
-                  f"unverified — {ENV_GUIDE}")
+                  f"run stops here; store a token with Environments "
+                  f"read in the RELEASE_ENV_READ_TOKEN secret, or set "
+                  f"the repository variable ALLOW_UNVERIFIED_RELEASE_ENV=1 "
+                  f"to proceed unverified — {ENV_GUIDE}")
+            return 1
+        if live and not existence_proven:
+            report("release env preflight: REFUSED — existence unproven: "
+                   f"{message}")
+            print(f"::error::{message} — even the existence of the "
+                  f"`release` environment is unproven, and a missing one "
+                  f"would be auto-created unprotected; the recorded "
+                  f"opt-in cannot cover this — store a token with "
+                  f"Environments read in the RELEASE_ENV_READ_TOKEN "
+                  f"secret so the gate can verify — {ENV_GUIDE}")
             return 1
         if live:
             suffix = (" — proceeding unverified by operator opt-in "

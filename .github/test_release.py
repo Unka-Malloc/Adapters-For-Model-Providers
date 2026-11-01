@@ -484,15 +484,23 @@ class PreflightCommandTest(unittest.TestCase):
                 rc, _ = self.run_preflight(mode, None, 403, None)
                 self.assertEqual(rc, 1)
 
-    def test_opt_in_exempts_only_unverified(self):
-        rc, out = self.run_preflight("live", "1", 403, None)
+    def test_opt_in_exempts_only_verified_existence(self):
+        # Existence proven (a 200 payload whose settings are partially
+        # unreadable): the recorded opt-in waves the remaining gaps.
+        rc, out = self.run_preflight("live", "1", 200, {"other": {}}, None)
         self.assertEqual(rc, 0)
         self.assertIn("proceeding unverified by operator opt-in", out)
+        # Existence unproven (403 answers everything): the opt-in cannot
+        # wave it — a possibly absent environment would auto-create
+        # unprotected.
+        rc, out = self.run_preflight("live", "1", 403, None)
+        self.assertEqual(rc, 1)
+        self.assertIn("existence", out)
+        # Rehearsals warn regardless of the existence question.
         rc, out = self.run_preflight("dry-run", "1", 403, None)
         self.assertEqual(rc, 0)
         self.assertIn("recorded opt-in", out)
         self.assertNotIn("stops here unless", out)
-        self.assertEqual(self.run_preflight("live", "yes", 403, None)[0], 1)
         # A proven refusal — a complete listing without `release` — is
         # never exempted by the opt-in.
         self.assertEqual(
