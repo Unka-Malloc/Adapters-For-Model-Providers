@@ -5,12 +5,13 @@
 # Two ways to release, one pipeline:
 #
 # - Weekly train: every Fri through 23:59 UTC+08:00 (Asia/Shanghai). The candidate
-#   is the last commit merged into `nightly` (the default branch until the
-#   repository adopts `nightly`) before the cutoff. The bump is the highest
-#   `release:patch`, `release:minor` or `release:major` label among its pull
-#   requests, patch when none is set. The train runs as a rehearsal.
-# - Run workflow: releases the head of `nightly` (or the requested commit)
-#   now, at the version typed in or bumped by the chosen level.
+#   is the last commit merged into the default branch before the cutoff.
+#   The bump is the highest `release:patch`, `release:minor` or
+#   `release:major` label among its pull requests, patch when none is set.
+#   The train runs as a rehearsal.
+# - Run workflow: releases the head of the default branch (or the
+#   requested commit) now, at the version typed in or bumped by the chosen
+#   level.
 #
 # There is deliberately no tag trigger: `publish.yml` accepts release
 # inputs only from verify runs on the default branch, and a pushed tag is
@@ -39,7 +40,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Exact version to publish, such as 0.3.0; empty bumps by level
+        description: Exact version to publish, such as 0.3.0 or v0.3.0; empty bumps by level
         required: false
         default: ""
       level:
@@ -48,7 +49,7 @@ on:
         options: [patch, minor, major]
         default: patch
       candidate:
-        description: Commit or branch to release; empty takes the head of nightly
+        description: Commit or branch to release; empty takes the head of the default branch
         required: false
         default: ""
       rehearse:
@@ -66,10 +67,14 @@ jobs:
   verify:
     # The job name is rendered by GitHub from this workflow file, outside the
     # reach of anything a step executes: it is the signature the publish gate
-    # binds the release decision to — the train's declared schedule mode and,
-    # for dispatches, the rehearsal flag and version inputs. The gate refuses
-    # any run whose signed name does not parse.
-    name: verify-train | sched=dry-run | rehearse=${{ inputs.rehearse }} | version=${{ inputs.version || '-' }} | level=${{ inputs.level }}
+    # binds the release decision to. `sig=` versions the wire format so a
+    # stale signature refuses instead of misparsing; `sched=` signs the same
+    # expression RELEASE_MODE runs under; `rehearse`/`version`/`level`/`cand`
+    # sign the dispatch inputs. The scheduled candidate is computed after the
+    # name renders, so it cannot be signed — the publish job re-derives it
+    # from the same cutoff and requires equality. The parser lives in
+    # publish.yml's `gate` job — keep both sides of this format in sync.
+    name: verify-train | sig=1 | sched=${{ github.event_name == 'schedule' && 'dry-run' || inputs.rehearse && 'dry-run' || 'live' }} | rehearse=${{ inputs.rehearse }} | version=${{ inputs.version || '-' }} | level=${{ inputs.level }} | cand=${{ inputs.candidate || '-' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
@@ -83,22 +88,31 @@ jobs:
       sha: ${{ steps.candidate.outputs.sha }}
       branch: ${{ steps.candidate.outputs.branch }}
     env:
-      # The train's declared mode governs scheduled runs only; a manual or
-      # tag event releases live unless the dispatch opted into a rehearsal.
+      # The train's declared mode governs scheduled runs only; a manual
+      # dispatch releases live unless it opted into a rehearsal — the same
+      # expression the signed job name reports in `sched=`.
       RELEASE_MODE: ${{ github.event_name == 'schedule' && 'dry-run' || inputs.rehearse && 'dry-run' || 'live' }}
       RELEASE_KIND: ${{ github.event_name == 'schedule' && 'train' || 'manual' }}
       INPUT_VERSION: ${{ inputs.version }}
       INPUT_LEVEL: ${{ inputs.level }}
       SIBLINGS: '[]'
+      DIR: 'Adapters-For-Model-Providers'
+      # Optional registry-index override (repository variable); empty
+      # falls through to release.py's documented crates.io default.
+      CARGO_REGISTRY_INDEX: ${{ vars.CARGO_REGISTRY_INDEX }}
     defaults:
       run:
         shell: bash
         working-directory: Adapters-For-Model-Providers
     steps:
+      # The checkout runs candidate code (verify scripts, build scripts);
+      # persist-credentials must stay off so the repository token never
+      # reaches a file it could read. gh calls get GH_TOKEN explicitly.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          path: Adapters-For-Model-Providers
+          path: ${{ env.DIR }}
           fetch-depth: 0
+          persist-credentials: false
 
       # Copied before the candidate checkout replaces the working tree, so the
       # helper always matches this workflow.
@@ -127,7 +141,7 @@ jobs:
 
       - name: Wait for cross-repository dependencies
         id: deps
-        run: python3 "$RUNNER_TEMP/release.py" deps --wait-minutes=150
+        run: python3 "$RUNNER_TEMP/release.py" deps --wait-minutes="${{ env.RELEASE_MODE == 'live' && '150' || '5' }}"
 
       - name: Compute the release version
         id: version
@@ -142,22 +156,29 @@ jobs:
         if: steps.version.outputs.release == 'true'
         run: |
           scripts/verify.sh
-      # The bump is applied here only so the dry-run validates the exact
-      # release versions; the OIDC job recreates it from the bound commit —
-      # nothing a verify-runner produced crosses the OIDC boundary.
+      # Every mode runs the release-shaped bump: the manifest rewriter is
+      # hand-written, and a rehearsal that skipped it would let a defect
+      # surface for the first time inside the OIDC job — after the approval
+      # gate. That job still recreates the bump from the bound commit with
+      # its own staged helper, so nothing a verify-runner produced crosses
+      # the boundary either way.
       - name: Apply the release version
-        if: steps.version.outputs.release == 'true' && steps.version.outputs.needs_set == 'true'
+        if: >-
+          steps.version.outputs.release == 'true' &&
+          steps.version.outputs.needs_set == 'true'
         env:
           NEXT: ${{ steps.version.outputs.next }}
         run: |
-          cargo install cargo-edit@0.13.13 --locked --no-default-features --features set-version
-          cargo set-version --workspace "$NEXT"
+          python3 "$RUNNER_TEMP/release.py" set-version "$NEXT"
           cargo update --workspace
 
-      # Dry-run validation only. No artifacts ship to the OIDC job: it
-      # repackages the bound commit itself with `cargo package --no-verify`,
-      # which collects manifest-declared files without compiling or running
-      # build scripts.
+      # Rehearsals build the .crate set with --no-verify — manifest
+      # normalization and member-pin resolution run for real, only the
+      # compile and the upload dry-run stay unexercised — then restore the
+      # tree the bump rewrote. Live runs pay for `cargo publish --dry-run`.
+      # No artifacts ship to the OIDC job either way: it repackages the
+      # bound commit itself with `cargo package --no-verify`, collecting
+      # manifest-declared files without compiling or running build scripts.
       - name: Package
         if: steps.version.outputs.release == 'true'
         env:
@@ -165,36 +186,40 @@ jobs:
         run: |
           args=()
           for crate in $EXCLUDES; do args+=(--exclude "$crate"); done
-          cargo publish --workspace --dry-run --allow-dirty "${args[@]}"
+          if [ "$RELEASE_MODE" = "live" ]; then
+            cargo publish --workspace --dry-run --allow-dirty "${args[@]}"
+          else
+            cargo package --workspace --allow-dirty --no-verify "${args[@]}"
+            # Restore what the rehearsal rewrote: tracked manifests and the
+            # lockfile, plus a Cargo.lock created where none was tracked.
+            git checkout -- .
+            git clean -fq -- Cargo.lock
+          fi
 
       # The release train (default branch) reads this data-only file for the
-      # candidate and a skip pre-filter; it lands for every trigger so the
-      # gate can short-circuit cleanly on unqualified candidates. Nothing
-      # here authorizes a publish: the gate derives kind and mode from
-      # GitHub-minted run metadata (the event and this job's signed name),
-      # and the release job recomputes the version decision from the bound
-      # commit. Values still expand from immutable run metadata inline —
-      # never from a variable candidate code could persist through
-      # $GITHUB_ENV.
+      # candidate pointer and a skip pre-filter — the only fields the gate
+      # consumes, so they are the only fields written. It lands for every
+      # trigger so the gate can short-circuit cleanly on unqualified
+      # candidates: a deps-not-ready or no-release run still produces a
+      # parseable record. Nothing here authorizes a publish: the gate
+      # derives kind and mode from GitHub-minted run metadata (the event and
+      # this job's signed name), and the release job recomputes the version
+      # decision from the bound commit. Values still expand from immutable
+      # run metadata inline — never from a variable candidate code could
+      # persist through $GITHUB_ENV.
       - name: Record the release inputs
         if: always()
         run: |
           mkdir -p target/release-inputs
           cat > target/release-inputs/env <<EOF
           sha=${{ steps.candidate.outputs.sha }}
-          branch=${{ steps.candidate.outputs.branch }}
-          release=${{ steps.version.outputs.release }}
-          kind=${{ github.event_name == 'schedule' && 'train' || 'manual' }}
-          mode=${{ github.event_name == 'schedule' && 'dry-run' || inputs.rehearse && 'dry-run' || 'live' }}
-          next=${{ steps.version.outputs.next }}
-          needs_set=${{ steps.version.outputs.needs_set }}
-          excludes=${{ steps.version.outputs.excludes }}
+          release=${{ steps.version.outputs.release || 'false' }}
           EOF
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: release-inputs
-          path: Adapters-For-Model-Providers/target/release-inputs/
+          path: ${{ env.DIR }}/target/release-inputs/
           retention-days: 7
           if-no-files-found: error

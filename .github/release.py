@@ -4,8 +4,8 @@
 
 Every subcommand runs inside the repository checkout, writes step outputs to
 $GITHUB_OUTPUT and a readable report to $GITHUB_STEP_SUMMARY. RELEASE_KIND
-says what started the run: `train` (the weekly schedule), `manual` (Run
-workflow) or `tag` (a pushed version tag).
+says what started the run: `train` (the weekly schedule) or `manual` (Run
+workflow).
 """
 from __future__ import annotations
 
@@ -29,7 +29,10 @@ SAFE_REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
 VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 DEP_KEYS = ("dependencies", "dev-dependencies", "build-dependencies")
 POLL_SECONDS = int(os.environ.get("TRAIN_POLL_SECONDS", "300"))
-INDEX = "https://index.crates.io"
+# The sparse-index base. CARGO_REGISTRY_INDEX overrides it (a mirror or a
+# fixture); publish.yml's shell probe shares the same default — keep them
+# in sync.
+INDEX = (os.environ.get("CARGO_REGISTRY_INDEX") or "https://index.crates.io").rstrip("/")
 
 
 class TrainError(Exception):
@@ -223,13 +226,10 @@ def remote_tags(slug: str) -> dict[tuple[int, int, int], str]:
 def cmd_candidate(args: argparse.Namespace) -> int:
     mode = os.environ.get("RELEASE_MODE", "dry-run")
     kind = os.environ.get("RELEASE_KIND", "train")
-    nightly = git_ok("rev-parse", "--verify", "-q", "refs/remotes/origin/nightly")
-    if kind == "train" and mode == "live" and not nightly:
-        raise TrainError("a live train needs the `nightly` branch")
     # The publish gate binds the candidate to the default-branch run head,
-    # so selection must live on that same branch: a `nightly` side line
-    # would pick candidates the gate is bound to reject. A repository that
-    # releases from `nightly` makes it the default branch.
+    # so selection must live on that same branch: a side line would pick
+    # candidates the gate is bound to reject, and the release's back-merge
+    # lands on this branch too.
     branch = args.default_branch
     cutoff = ""
     if args.override:
@@ -280,7 +280,9 @@ def cmd_deps(args: argparse.Namespace) -> int:
         print(f"dependencies not on crates.io yet: {' '.join(problem)}", flush=True)
         time.sleep(POLL_SECONDS)
     rows, refs = [], {}
-    for position, sibling in enumerate(siblings):
+    # Refs are keyed by sibling directory, not position: a reordered
+    # declaration can never pair a checkout with the wrong resolved tag.
+    for sibling in siblings:
         tags = remote_tags(sibling["slug"])
         versions = sorted(resolved[c] for c in sibling["crates"] if c in resolved)
         if versions:
@@ -292,7 +294,7 @@ def cmd_deps(args: argparse.Namespace) -> int:
             ref = tags[max(tags)]
         else:
             raise TrainError(f"{sibling['slug']} has no release tag to build against")
-        refs[f"ref_{position}"] = ref
+        refs[f"ref_{sibling['dir']}"] = ref
         rows.append(f"| {sibling['dir']} | `{ref}` |")
     report("### Dependencies\n\n| Sibling | Checked out |\n| --- | --- |\n" + "\n".join(rows))
     emit(ready="true", **refs)
@@ -377,11 +379,17 @@ def cargo_metadata(repo: pathlib.Path) -> dict:
     --manifest-path so a checkout's .cargo/config.toml — a credential
     provider is executable — can never load beside the release identity.
     --no-deps suffices: member manifests carry their own dependencies."""
-    done = subprocess.run(
-        ["cargo", "metadata", "--format-version", "1", "--no-deps",
-         "--manifest-path", str(repo / "Cargo.toml")],
-        cwd=tempfile.mkdtemp(), capture_output=True, text=True, check=True,
-    )
+    with tempfile.TemporaryDirectory() as scratch:
+        try:
+            done = subprocess.run(
+                ["cargo", "metadata", "--format-version", "1", "--no-deps",
+                 "--manifest-path", str(repo / "Cargo.toml")],
+                cwd=scratch, capture_output=True, text=True, check=True,
+            )
+        except subprocess.CalledProcessError as error:
+            tail = (error.stderr or "").strip().splitlines()
+            raise TrainError(
+                f"cargo metadata failed: {tail[-1] if tail else 'unknown error'}")
     return json.loads(done.stdout)
 
 
@@ -405,41 +413,33 @@ def cmd_version(args: argparse.Namespace) -> int:
     released = [v for v in tags if v in on_registry]
     last_tag = tags[max(released)] if released else None
     notes, pulls = [], []
-    if kind == "tag":
-        tag = os.environ.get("GITHUB_REF_NAME", "")
-        upcoming, level, changed = parse_version(tag[1:]), "tag", True
-        stale = sorted(p["name"] for p in publishable if parse_version(p["version"]) != upcoming)
-        if stale:
-            raise TrainError(f"{tag} does not match the manifests of {', '.join(stale)}; set them "
-                             f"to {show(upcoming)} before tagging, or use Run workflow")
+    if last_tag:
+        changed = not git_ok("diff", "--quiet", last_tag, args.candidate)
     else:
-        if last_tag:
-            changed = not git_ok("diff", "--quiet", last_tag, args.candidate)
-        else:
-            changed = True
-            notes.append("No tag matches a published version, so the whole history counts as new.")
-        if tags and max(tags) not in on_registry:
-            notes.append(f"`{tags[max(tags)]}` is tagged but not on crates.io; its number is "
-                         "skipped.")
-        requested = None
-        if kind == "manual":
-            level = os.environ.get("INPUT_LEVEL") or "patch"
-            if level not in LEVELS:
-                raise TrainError(f"unknown level {level!r}")
-            text = (os.environ.get("INPUT_VERSION") or "").strip().removeprefix("v")
-            if text:
-                requested = parse_version(text)
-                if requested is None:
-                    raise TrainError(f"version {text!r} is not <major>.<minor>.<patch>")
-                level = "exact"
-        else:
-            level = "patch"
-            if changed and last_tag and args.branch:
-                level, pulls = labelled_level(slug, args.branch, args.candidate, last_tag)
-        upcoming, resume = choose_version(manifest, published, set(tags), level, requested)
-        if resume:
-            changed = True
-            notes.append(f"{show(upcoming)} is only partly on crates.io; this run finishes it.")
+        changed = True
+        notes.append("No tag matches a published version, so the whole history counts as new.")
+    if tags and max(tags) not in on_registry:
+        notes.append(f"`{tags[max(tags)]}` is tagged but not on crates.io; its number is "
+                     "skipped.")
+    requested = None
+    if kind == "manual":
+        level = os.environ.get("INPUT_LEVEL") or "patch"
+        if level not in LEVELS:
+            raise TrainError(f"unknown level {level!r}")
+        text = (os.environ.get("INPUT_VERSION") or "").strip().removeprefix("v")
+        if text:
+            requested = parse_version(text)
+            if requested is None:
+                raise TrainError(f"version {text!r} is not <major>.<minor>.<patch>")
+            level = "exact"
+    else:
+        level = "patch"
+        if changed and last_tag and args.branch:
+            level, pulls = labelled_level(slug, args.branch, args.candidate, last_tag)
+    upcoming, resume = choose_version(manifest, published, set(tags), level, requested)
+    if resume:
+        changed = True
+        notes.append(f"{show(upcoming)} is only partly on crates.io; this run finishes it.")
     done = sorted(name for name, versions in published.items() if upcoming in versions)
     fresh = sorted(name for name, versions in published.items() if not versions)
     if fresh:
@@ -450,7 +450,7 @@ def cmd_version(args: argparse.Namespace) -> int:
         notes.append(f"Every crate already holds {show(upcoming)} on crates.io.")
     excludes = sorted({p["name"] for p in packages if p not in publishable} | set(done))
     needs_set = any(parse_version(p["version"]) != upcoming for p in publishable)
-    source = {"train": "pull request labels", "manual": "Run workflow input", "tag": "pushed tag"}
+    source = {"train": "pull request labels", "manual": "Run workflow input"}
     summary = [
         "### Version",
         "",
@@ -533,6 +533,316 @@ def cmd_freshness(args: argparse.Namespace) -> int:
     return 0
 
 
+SECTION = re.compile(r"^\[\[?\s*(?P<name>.+?)\s*\]?\]\s*(?:#.*)?$")
+ENTRY = re.compile(
+    r"^(?P<key>'[^']+'|\"[^\"]+\"|[A-Za-z0-9_-]+)"
+    r"(?:\.(?P<sub>'[^']+'|\"[^\"]+\"|[A-Za-z0-9_-]+))?\s*=\s*(?P<value>.*)$"
+)
+QUOTED = r'"[^"]*"|\'[^\']*\''
+VERSION_FIELD = re.compile(rf"version\s*=\s*(?:{QUOTED})")
+ASSIGN_VALUE = re.compile(rf"(=\s*)(?:{QUOTED})")
+WORKSPACE_FIELD = re.compile(r"\bworkspace\s*=\s*true\b")
+PACKAGE_FIELD = re.compile(rf"package\s*=\s*({QUOTED})")
+STRING_VALUE = re.compile(rf"^\s*({QUOTED})")
+
+
+def section_of(line: str) -> str | None:
+    """The table name a `[a.b]`/`[[a.b]]` header opens, or None."""
+    text = line.strip()
+    if not text.startswith("["):
+        return None
+    found = SECTION.match(text)
+    if not found:
+        return None
+    return found.group("name").rstrip("]").strip()
+
+
+def key_segments(section: str) -> list[str]:
+    """`target.'cfg(unix)'.dependencies` -> `[target, cfg(unix), dependencies]`:
+    dots inside quoted segments stay inside the segment."""
+    parts, current, quote = [], [], ""
+    for ch in section:
+        if quote:
+            if ch == quote:
+                quote = ""
+            else:
+                current.append(ch)
+        elif ch in "\"'":
+            quote = ch
+        elif ch == ".":
+            parts.append("".join(current).strip())
+            current = []
+        else:
+            current.append(ch)
+    parts.append("".join(current).strip())
+    return parts
+
+
+def dep_section(segments: list[str]) -> list[str] | None:
+    """The dependency key path when the section opens a dependency table —
+    `[workspace.dependencies]` and `[target.<cfg>.dependencies]` qualify —
+    or a sub-table inside one (`[dependencies.<name>]`); None otherwise."""
+    if segments[:1] == ["workspace"]:
+        segments = segments[1:]
+    elif segments[:1] == ["target"] and len(segments) >= 3:
+        segments = segments[2:]
+    if segments and segments[0] in DEP_KEYS:
+        return segments[1:]
+    return None
+
+
+def open_depth(text: str) -> int:
+    """`{`/`[` minus `}`/`]` outside quoted strings — a multi-line inline
+    table or array keeps the entry it started on open until it closes."""
+    depth, quote, escaped = 0, "", False
+    for ch in text:
+        if quote:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = ""
+        elif ch in "\"'":
+            quote = ch
+        elif ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+    return depth
+
+
+def gather(rest: list[str], index: int) -> tuple[str, int]:
+    """The entry text starting at rest[index], continued while its inline
+    table or array stays open; returns (text, index of its last line)."""
+    block = [rest[index]]
+    while open_depth("".join(block)) > 0 and index + 1 < len(rest):
+        index += 1
+        block.append(rest[index])
+    return "".join(block), index
+
+
+def string_value(text: str) -> str | None:
+    """The bare-string scalar a value starts with, unquoted, or None."""
+    found = STRING_VALUE.match(text or "")
+    return found.group(1)[1:-1] if found else None
+
+
+def unrecognized(path: pathlib.Path, section: str, line: str) -> TrainError:
+    return TrainError(
+        f"{path}: [{section}] entry {line.strip()!r} is not a dependency shape "
+        "set-version recognizes")
+
+
+def rewrite_package(path: pathlib.Path, section: str, body: list[str],
+                    next_v: str) -> tuple[list[str], int]:
+    """`[package]`/`[workspace.package]`: the member's own version field."""
+    out, edited = [], 0
+    for line in body:
+        if re.match(r"version\s*=", line.strip()):
+            new = VERSION_FIELD.sub(f'version = "{next_v}"', line, count=1)
+            if new == line:
+                raise TrainError(
+                    f"{path}: [{section}] version is not a plain string")
+            line, edited = new, edited + 1
+        out.append(line)
+    return out, edited
+
+
+def rewrite_dep_table(path: pathlib.Path, section: str, body: list[str],
+                      members: set[str], next_v: str) -> tuple[list[str], int]:
+    """A flat dependency table: bare strings, inline tables (multi-line
+    included) and dotted keys. A member requirement in a form this cannot
+    rewrite fails instead of silently keeping the old pin."""
+    header, rest = body[0], body[1:]
+    # Dotted-key renames (`foo.package = "real"`) may sit below the entries
+    # they qualify — collect them before rewriting.
+    renames: dict[str, str] = {}
+    index = 0
+    while index < len(rest):
+        found = ENTRY.match(rest[index].strip())
+        if found and (found.group("sub") or "").strip("'\"") == "package":
+            value = string_value(found.group("value"))
+            if value:
+                renames[found.group("key").strip("'\"")] = value
+        _, index = gather(rest, index)
+        index += 1
+    out, edited, index = [header], 0, 0
+    while index < len(rest):
+        stripped = rest[index].strip()
+        text, index = gather(rest, index)
+        index += 1
+        if not stripped or stripped.startswith("#"):
+            out.append(text)
+            continue
+        found = ENTRY.match(stripped)
+        if found is None:
+            raise unrecognized(path, section, text)
+        key = found.group("key").strip("'\"")
+        sub = (found.group("sub") or "").strip("'\"")
+        if sub:
+            if sub == "version" and renames.get(key, key) in members:
+                text, count = ASSIGN_VALUE.subn(f'\\g<1>"{next_v}"', text, count=1)
+                if not count:
+                    raise TrainError(
+                        f"{path}: [{section}] `{key}.version` is not a plain string")
+                edited += 1
+            out.append(text)
+            continue
+        if WORKSPACE_FIELD.search(text):
+            out.append(text)
+            continue
+        package = PACKAGE_FIELD.search(text)
+        if (package.group(1)[1:-1] if package else key) not in members:
+            out.append(text)
+            continue
+        if VERSION_FIELD.search(text):
+            text = VERSION_FIELD.sub(f'version = "{next_v}"', text, count=1)
+        elif found.group("value").lstrip().startswith(("\"", "'")):
+            text = ASSIGN_VALUE.sub(f'\\g<1>"{next_v}"', text, count=1)
+        elif "{" in text:
+            opening = re.search(r"\{(\s*)", text)
+            assert opening is not None
+            gap = opening.group(1)
+            closing = text[opening.end(1):].lstrip().startswith("}")
+            comma = "" if closing else ","
+            insert = (f'version = "{next_v}"{comma}' + gap
+                      if "\n" in gap else f'version = "{next_v}"{comma} ')
+            text = text[:opening.end(1)] + insert + text[opening.end(1):]
+        else:
+            raise TrainError(
+                f"{path}: [{section}] member dependency `{key}` is in a form "
+                "set-version cannot rewrite")
+        edited += 1
+        out.append(text)
+    return out, edited
+
+
+def rewrite_dep_subtable(path: pathlib.Path, section: str, dep_key: str,
+                         body: list[str], members: set[str],
+                         next_v: str) -> tuple[list[str], int]:
+    """`[dependencies.<dep_key>]` (and the namespaced variants): the member
+    pin lives on `version =` lines inside the table, and `package =` may
+    rename the dependency. A path-only member table gains an explicit pin,
+    matching what the flat `{ path = ... }` form gets."""
+    header, rest = body[0], body[1:]
+    package = None
+    for line in rest:
+        found = ENTRY.match(line.strip())
+        if found and found.group("key").strip("'\"") == "package" \
+                and not found.group("sub"):
+            package = string_value(found.group("value"))
+    if (package or dep_key) not in members:
+        return body, 0
+    out, edited, inherited, index = [header], 0, False, 0
+    while index < len(rest):
+        stripped = rest[index].strip()
+        text, index = gather(rest, index)
+        index += 1
+        if not stripped or stripped.startswith("#"):
+            out.append(text)
+            continue
+        found = ENTRY.match(stripped)
+        if found is None:
+            raise unrecognized(path, section, text)
+        key = found.group("key").strip("'\"")
+        sub = (found.group("sub") or "").strip("'\"")
+        if key == "version" and not sub:
+            text, count = ASSIGN_VALUE.subn(f'\\g<1>"{next_v}"', text, count=1)
+            if not count:
+                raise TrainError(
+                    f"{path}: [{section}] member `{dep_key}` pins a version "
+                    "set-version cannot rewrite")
+            edited += 1
+        elif key == "version" and sub == "workspace" \
+                or key == "workspace" and WORKSPACE_FIELD.search(text):
+            inherited = True
+        out.append(text)
+    if not edited and not inherited:
+        out.insert(1, f'version = "{next_v}"\n')
+        edited += 1
+    return out, edited
+
+
+def rewrite_section(path: pathlib.Path, section: str | None, body: list[str],
+                    members: set[str], next_v: str) -> tuple[list[str], int]:
+    if section is None:
+        return body, 0
+    segments = key_segments(section)
+    if segments in (["package"], ["workspace", "package"]):
+        return rewrite_package(path, section, body, next_v)
+    subs = dep_section(segments)
+    if subs is None:
+        return body, 0
+    if not subs:
+        return rewrite_dep_table(path, section, body, members, next_v)
+    if len(subs) > 1:
+        if subs[0] in members:
+            raise TrainError(
+                f"{path}: [{section}] nests under member dependency `{subs[0]}` "
+                "in a form set-version cannot rewrite")
+        return body, 0
+    return rewrite_dep_subtable(path, section, subs[0], body, members, next_v)
+
+
+def rewrite_manifest(path: pathlib.Path, members: set[str], next_v: str) -> int:
+    """Move a manifest to `next_v`: `[package]`/`[workspace.package]` version
+    and every dependency-table entry whose package names a workspace member
+    — bare strings, inline tables, dotted keys and `[<table>.<member>]`
+    sub-tables, under `[dev-]`/`[build-]`/`[workspace.]`/`[target.<cfg>.]`
+    variants alike — so the coordinated bump keeps manifests internally
+    consistent and the lockfile update afterwards resolves against the new
+    member versions. A member requirement in a shape the rewriter cannot
+    update stops the train instead of leaving a stale pin that would first
+    surface inside the publishing job."""
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    # Segment the document into (section, body) pairs: a dependency
+    # sub-table's `package =` rename can sit lines away from its pin, so
+    # rewriting needs the whole section in view.
+    segments: list[tuple[str | None, list[str]]] = []
+    name: str | None = None
+    body: list[str] = []
+    for line in lines:
+        found = section_of(line)
+        if found is not None:
+            segments.append((name, body))
+            name, body = found, [line]
+        else:
+            body.append(line)
+    segments.append((name, body))
+    out: list[str] = []
+    edited = 0
+    for name, body in segments:
+        rewritten, count = rewrite_section(path, name, body, members, next_v)
+        out.extend(rewritten)
+        edited += count
+    if edited:
+        path.write_text("".join(out), encoding="utf-8")
+    return edited
+
+
+def set_version(repo: pathlib.Path, next_v: str) -> int:
+    """cargo_metadata-driven rewrite, data only: every member manifest and
+    the workspace root — where [workspace.dependencies] pins member
+    requirements — so no path dep is left requiring the old numbers."""
+    metadata = cargo_metadata(repo)
+    member_ids = set(metadata["workspace_members"])
+    packages = [p for p in metadata["packages"] if p["id"] in member_ids]
+    members = {p["name"] for p in packages}
+    files = {pathlib.Path(p["manifest_path"]) for p in packages}
+    files.add(pathlib.Path(metadata["workspace_root"]) / "Cargo.toml")
+    return sum(rewrite_manifest(path, members, next_v) for path in sorted(files))
+
+
+def cmd_set_version(args: argparse.Namespace) -> int:
+    if parse_version(args.version) is None:
+        raise TrainError(f"set-version wants <major>.<minor>.<patch>, got {args.version!r}")
+    edited = set_version(pathlib.Path.cwd(), args.version)
+    report(f"### Version bump\n\nSet every workspace member and member requirement "
+           f"to `{args.version}` ({edited} field(s) rewritten).")
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="release.py")
     commands = root.add_subparsers(dest="command", required=True)
@@ -552,6 +862,9 @@ def parser() -> argparse.ArgumentParser:
     version.set_defaults(run=cmd_version)
     order = commands.add_parser("order")
     order.set_defaults(run=cmd_order)
+    set_version_cmd = commands.add_parser("set-version")
+    set_version_cmd.add_argument("version")
+    set_version_cmd.set_defaults(run=cmd_set_version)
     freshness = commands.add_parser("freshness")
     freshness.add_argument("--window-days", type=int, default=14)
     freshness.set_defaults(run=cmd_freshness)
