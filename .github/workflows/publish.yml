@@ -45,7 +45,9 @@
 # default-branch helper staged before any candidate checkout: no
 # candidate-controlled code executes under the publishing identity.
 #
-# Credentials: crates.io Trusted Publishing; no stored secret.
+# Credentials: crates.io Trusted Publishing (OIDC) — no stored
+# publishing credential; the optional RELEASE_ENV_READ_TOKEN secret is
+# read-scoped and feeds only the environment preflight step.
 name: publish
 
 on:
@@ -286,21 +288,11 @@ jobs:
           sparse-checkout: .github
           persist-credentials: false
 
-      # Runs on every bound gate run under the same matrix as the file
-      # header: a proven refusal — a `release` environment absent from a
-      # complete, readable listing (GitHub would auto-create one
-      # unprotected, silently removing the approval gate), no required
-      # reviewers, or an all-branches deployment rule — stops a live
-      # bind and lands as an error annotation on a rehearsal, which
-      # continues either way. Repository read access normally satisfies
-      # the endpoints; an unreadable answer is the exceptional,
-      # permission-limited case and counts as 'unverified': a live bind
-      # fails closed there — a possibly-absent environment would
-      # proceed unprotected — unless a step token with Environments read
-      # is supplied or the operator records the
-      # ALLOW_UNVERIFIED_RELEASE_ENV=1 repository variable, a logged
-      # exception the step names in the log and step summary, not a
-      # setting to keep around; a rehearsal warns and continues.
+      # Runs on every bound gate run under the matrix in the file
+      # header. The recorded opt-in covers only unverified answers where
+      # the environment's existence is proven — a possibly absent
+      # environment still stops a live bind. The positive-verification
+      # seam is the RELEASE_ENV_READ_TOKEN secret bound below.
       - name: Preflight the release environment
         if: steps.load.outputs.release == 'true'
         env:

@@ -916,6 +916,31 @@ def cmd_set_version(args: argparse.Namespace) -> int:
 # possibly absent environment into existence. Either remedy is named in
 # the log and step summary when it fires.
 
+# Remedy vocabulary — one source so the workflow comments, the log and
+# the annotations cannot drift apart.
+TOKEN_REMEDY = ("store a token with Environments read in the "
+                "RELEASE_ENV_READ_TOKEN secret")
+OPT_IN_VAR = "ALLOW_UNVERIFIED_RELEASE_ENV"
+JOB_ENTRY = ("; the environment's own protection still applies at job "
+             "entry")
+
+
+def _unverified_remedy(status: int, exists: bool) -> str:
+    """The one remedy that can actually unblock this unverified answer:
+    a transient failure wants a retry, proven existence can also take
+    the recorded opt-in, and unproven existence accepts only a token —
+    the opt-in can never wave a possibly absent environment."""
+    if status == 0 or status >= 500:
+        return ("the environment endpoints could not be read — retry "
+                "the run; a stored token or the recorded opt-in cannot "
+                "substitute for an answer")
+    if exists:
+        return (f"{TOKEN_REMEDY}, or set the repository variable "
+                f"{OPT_IN_VAR}=1 to proceed unverified")
+    return (f"{TOKEN_REMEDY} so the gate can verify — the recorded "
+            "opt-in cannot cover a possibly absent environment")
+
+
 ENV_GUIDE = ("required reviewers plus a deployment-branch rule limited to "
              "the default branch — create it under Settings → Environments → "
              "release, then bind crates.io Trusted Publishing to it")
@@ -995,11 +1020,12 @@ def gh_paginated(path: str, key: str) -> tuple[int, list, bool]:
 def needed_evidence(status: int, env: object) -> set[str]:
     """Which sub-fetches a (status, payload) pair calls for — the driver
     gathers only the facets the payload itself references: `listing` to
-    prove absence on a 404, `branch`/`policies` when the deployment
+    settle the existence question whenever the environment endpoint
+    itself cannot be read, `branch`/`policies` when the deployment
     branch policy enables those mechanisms."""
-    if status == 404:
+    if status != 200:
         return {"listing"}
-    if status != 200 or not isinstance(env, dict):
+    if not isinstance(env, dict):
         return set()
     policy = env.get("deployment_branch_policy")
     if not isinstance(policy, dict):
@@ -1022,9 +1048,7 @@ def preflight_verdict(
     env: object,
     evidence: dict,
     default: str,
-    live: bool,
-    opt_in: bool = False,
-) -> tuple[str, str]:
+) -> tuple[str, str, bool]:
     """The `release` environment decision from fetched evidence alone —
     no I/O, so every row of the contract is exercised from a table.
 
@@ -1033,48 +1057,43 @@ def preflight_verdict(
     /environments walk, "policies" is (status, complete, names) of a
     paginated deployment-branch-policies walk, and "branch" is
     (status, protected) of the default branch. Returns (verdict,
-    message); verdict is "pass", "unverified" or "refuse" — the caller
-    maps refuse and live unverified without the opt-in to a hard stop,
-    and every other combination to a warning. The job-entry reassurance
-    is rendered only where the job will actually run: a rehearsal
-    proceeds, and a live unverified proceeds only by the recorded
-    opt-in."""
-    # The clause is true exactly where the release job will enter the
-    # environment: every rehearsal, and a live bind only when the
-    # recorded exception lets it proceed.
-    entry = ("" if live and not opt_in else
-             "; the environment's own protection still applies at job "
-             "entry")
-    if status == 404:
-        # Absence is conclusive only from a complete, readable
-        # enumeration: a lone 404 cannot tell a missing environment from
-        # a permission wall.
+    message, existence_proven); verdict is "pass", "unverified" or
+    "refuse" — the caller maps refuse and live unverified to a hard
+    stop, with one recorded exception: a live bind may proceed on an
+    unverified answer by opt-in only when existence_proven is true (the
+    environment exists; only its settings are unreadable). The
+    job-entry reassurance and the remedy text are the caller's to
+    render so they can never disagree with the stop decision."""
+    if status != 200:
+        # Existence is conclusive only from a complete, readable
+        # enumeration: the endpoint's own error cannot tell a missing
+        # environment from a permission wall. A listing that names
+        # `release` proves existence even when the endpoint refuses;
+        # one that omits it proves absence — and a missing environment
+        # auto-creates unprotected — regardless of the status seen.
         list_status, complete, names = evidence.get("listing", (0, False, []))
         if list_status == 200 and complete:
             if "release" not in names:
                 return "refuse", (
                     "this repository has no `release` environment — GitHub "
                     "would create an unprotected one when the release job "
-                    "starts, silently removing the approval gate")
+                    "starts, silently removing the approval gate"), False
+            detail = (f"HTTP {status}" if status != 404 else
+                      "its own endpoint answered HTTP 404")
             return "unverified", (
-                "the environments listing names `release` yet its own "
-                "endpoint answered HTTP 404 — treated as unreadable"
-                + entry)
+                f"the environments listing names `release` yet "
+                f"{detail} — settings treated as unreadable"), True
         detail = (
             "the environments listing could not be read to completion"
             if list_status == 200
             else f"listing: {status_detail(list_status)}")
         return "unverified", (
-            f"the `release` environment answered HTTP 404 and absence could "
-            f"not be proven ({detail})" + entry)
-    if status != 200:
-        return "unverified", (
-            f"cannot read the `release` environment's settings with this "
-            f"token ({status_detail(status)})" + entry)
+            f"the `release` environment answered "
+            f"{status_detail(status)} and existence could not be proven "
+            f"({detail})"), False
     if not isinstance(env, dict):
         return "unverified", (
-            "the `release` environment returned an unreadable payload"
-            + entry)
+            "the `release` environment returned an unreadable payload"), True
 
     skipped: list[str] = []
     # Key absent → a facet this payload does not expose (skipped, then
@@ -1089,7 +1108,8 @@ def preflight_verdict(
         and rule.get("reviewers")
         for rule in env.get("protection_rules") or []
     ):
-        return "refuse", "the `release` environment has no required reviewers"
+        return "refuse", ("the `release` environment has no required "
+                          "reviewers"), True
     if "deployment_branch_policy" not in env:
         skipped.append("deployment-branch rule (payload omits "
                        "deployment_branch_policy)")
@@ -1101,13 +1121,14 @@ def preflight_verdict(
             # setting, so it is refused, not skipped.
             return "refuse", (
                 "the `release` environment lets every branch deploy — "
-                "deployment_branch_policy reads null (no restriction)")
+                "deployment_branch_policy reads null (no restriction)"), True
         if not isinstance(policy, dict):
             skipped.append("deployment-branch rule (unreadable "
                            "deployment_branch_policy)")
         elif not policy.get("protected_branches") \
                 and not policy.get("custom_branch_policies"):
-            return "refuse", "the `release` environment lets every branch deploy"
+            return "refuse", ("the `release` environment lets every "
+                              "branch deploy"), True
         else:
             if policy.get("protected_branches"):
                 branch_status, protected = evidence.get("branch", (0, None))
@@ -1117,7 +1138,7 @@ def preflight_verdict(
                 elif not protected:
                     return "refuse", (
                         f"only protected branches may deploy to `release`, "
-                        f"but `{default}` is not a protected branch")
+                        f"but `{default}` is not a protected branch"), True
             if policy.get("custom_branch_policies"):
                 policies_status, policies_done, names = evidence.get(
                     "policies", (0, False, []))
@@ -1132,14 +1153,14 @@ def preflight_verdict(
                     return "refuse", (
                         f"no `release` deployment-branch rule lets the "
                         f"default branch `{default}` deploy "
-                        f"(rules: {', '.join(map(str, names)) or 'none'})")
+                        f"(rules: {', '.join(map(str, names)) or 'none'})"), True
     if skipped:
         return "unverified", (
             f"release environment partially verified — unverified: "
             f"{'; '.join(skipped)} — confirm them under Settings → "
-            "Environments → release" + entry)
+            "Environments → release"), True
     return "pass", ("required reviewers and a bounded deployment-branch "
-                    "rule are in place")
+                    "rule are in place"), True
 
 
 def cmd_preflight_env(args: argparse.Namespace) -> int:
@@ -1147,9 +1168,10 @@ def cmd_preflight_env(args: argparse.Namespace) -> int:
     calls for, hand it to the pure verdict, render the result. A refusal
     exits 1 on a live bind and lands as an error annotation on a
     rehearsal; an unverified verdict is likewise a hard stop on a live
-    bind unless the operator recorded ALLOW_UNVERIFIED_RELEASE_ENV=1 —
-    the opt-in names itself in the warning — while rehearsals always
-    warn and proceed."""
+    bind — except where the environment's existence is proven and the
+    operator recorded ALLOW_UNVERIFIED_RELEASE_ENV=1, a logged exception
+    that can never cover a proven refusal or a possibly absent
+    environment. Rehearsals always warn and continue."""
     if not os.environ.get("GH_TOKEN") or not os.environ.get("GITHUB_REPOSITORY"):
         raise TrainError("preflight-env needs GH_TOKEN and GITHUB_REPOSITORY")
     default = os.environ.get("DEFAULT_BRANCH")
@@ -1182,9 +1204,9 @@ def cmd_preflight_env(args: argparse.Namespace) -> int:
             evidence["policies"] = (
                 policies_status, complete,
                 [row.get("name") for row in rows if isinstance(row, dict)])
-    opt_in = os.environ.get("ALLOW_UNVERIFIED_RELEASE_ENV") == "1"
-    verdict, message = preflight_verdict(
-        status, env, evidence, default, live, opt_in)
+    opt_in = os.environ.get(OPT_IN_VAR) == "1"
+    verdict, message, exists = preflight_verdict(
+        status, env, evidence, default)
     if verdict == "refuse":
         report(f"release env preflight: REFUSED — {message}")
         if live:
@@ -1197,50 +1219,49 @@ def cmd_preflight_env(args: argparse.Namespace) -> int:
         return 0
     if verdict == "unverified":
         # A live bind fails closed on anything it cannot positively
-        # verify: an environment that may be absent would be auto-created
-        # unprotected, silently dropping the approval gate. Remedies are
-        # a step token that can read the environment, or one recorded
-        # operator act — the repository variable
-        # ALLOW_UNVERIFIED_RELEASE_ENV=1 — never a silent warn; rehearsals
-        # warn unconditionally as the early signal they exist to provide.
-        # The opt-in cannot wave the catastrophic case it exists beside:
-        # when existence itself is unproven, a possibly-absent
-        # environment would be auto-created unprotected. Existence is
-        # proven by a 200 environment payload, or by a complete listing
-        # that names `release` while its endpoint says 404.
-        list_status, complete, names = evidence.get(
-            "listing", (0, False, []))
-        existence_proven = status == 200 or (
-            status == 404 and list_status == 200 and complete
-            and "release" in names)
-        if live and not opt_in:
-            report(f"release env preflight: REFUSED — unverified: {message}")
-            print(f"::error::{message} — live publication could not "
-                  f"positively verify the `release` environment, so the "
-                  f"run stops here; store a token with Environments "
-                  f"read in the RELEASE_ENV_READ_TOKEN secret, or set "
-                  f"the repository variable ALLOW_UNVERIFIED_RELEASE_ENV=1 "
-                  f"to proceed unverified — {ENV_GUIDE}")
-            return 1
-        if live and not existence_proven:
-            report("release env preflight: REFUSED — existence unproven: "
-                   f"{message}")
-            print(f"::error::{message} — even the existence of the "
-                  f"`release` environment is unproven, and a missing one "
-                  f"would be auto-created unprotected; the recorded "
-                  f"opt-in cannot cover this — store a token with "
-                  f"Environments read in the RELEASE_ENV_READ_TOKEN "
-                  f"secret so the gate can verify — {ENV_GUIDE}")
-            return 1
+        # verify. The recorded opt-in exempts only the narrow case where
+        # the environment's existence is itself proven: a possibly absent
+        # environment would be auto-created unprotected at job entry,
+        # which is the catastrophic case the gate exists for, so no
+        # operator knob waves it. Remedies are selected by the answer's
+        # own shape — retry a transient failure, a readable token
+        # everywhere, and the opt-in only where it can apply.
         if live:
-            suffix = (" — proceeding unverified by operator opt-in "
-                      "(ALLOW_UNVERIFIED_RELEASE_ENV=1)")
-        elif opt_in:
+            if not opt_in:
+                report(f"release env preflight: REFUSED — unverified: "
+                       f"{message}")
+                print(f"::error::{message} — live publication could not "
+                      f"positively verify the `release` environment, so "
+                      f"the run stops here; "
+                      f"{_unverified_remedy(status, exists)} — {ENV_GUIDE}")
+                return 1
+            if not exists:
+                report("release env preflight: REFUSED — existence "
+                       f"unproven: {message}")
+                print(f"::error::{message} — even the existence of the "
+                      f"`release` environment is unproven, and a missing "
+                      f"one would be auto-created unprotected; "
+                      f"{_unverified_remedy(status, False)} — {ENV_GUIDE}")
+                return 1
+            suffix = (f" — proceeding unverified by operator opt-in "
+                      f"({OPT_IN_VAR}=1){JOB_ENTRY}")
+            print(f"::warning::{message}{suffix}")
+            report(f"release env preflight: warned — {message}{suffix}")
+            return 0
+        # A rehearsal warns as the early signal it exists to provide;
+        # the suffix previews what the identical live run would do.
+        if exists and opt_in:
             suffix = (" — a live run would proceed unverified by the "
-                      "recorded opt-in (ALLOW_UNVERIFIED_RELEASE_ENV=1)")
+                      f"recorded opt-in ({OPT_IN_VAR}=1)")
+        elif exists:
+            suffix = (f" — a live run would stop here unless "
+                      f"{OPT_IN_VAR}=1 is recorded")
+        elif opt_in:
+            suffix = (" — a live run would still stop: the recorded "
+                      "opt-in cannot cover unproven existence")
         else:
-            suffix = (" — a live run stops here unless "
-                      "ALLOW_UNVERIFIED_RELEASE_ENV=1 is recorded")
+            suffix = (f" — a live run would stop here; "
+                      f"{_unverified_remedy(status, False)}")
         print(f"::warning::{message}{suffix}")
         report(f"release env preflight: warned — {message}{suffix}")
         return 0

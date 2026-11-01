@@ -230,10 +230,10 @@ REVIEWERS = [{"type": "required_reviewers", "reviewers": [{"id": 1}]}]
 CUSTOM_POLICY = {"protected_branches": False, "custom_branch_policies": True}
 BRANCH_POLICY = {"protected_branches": True, "custom_branch_policies": False}
 
-# (name, GET status, environment payload, evidence, live, verdict,
-#  message fragment). The verdict function is pure — status plus fetched
-# evidence in, a verdict out — so every row of the publish gate's
-# environment contract sits in this table.
+# (name, GET status, environment payload, evidence, verdict,
+#  existence_proven, message fragment). The verdict function is pure —
+# status plus fetched evidence in, a verdict out — so every row of the
+# publish gate's environment contract sits in this table.
 PREFLIGHT_CASES = [
     (
         "fully verified payload passes",
@@ -241,7 +241,7 @@ PREFLIGHT_CASES = [
         {"protection_rules": REVIEWERS,
          "deployment_branch_policy": CUSTOM_POLICY},
         {"policies": (200, True, ["main", "release-*"])},
-        True, "pass", "bounded deployment-branch rule",
+        "pass", True, "bounded deployment-branch rule",
     ),
     (
         "verified through branch protection passes",
@@ -249,7 +249,7 @@ PREFLIGHT_CASES = [
         {"protection_rules": REVIEWERS,
          "deployment_branch_policy": BRANCH_POLICY},
         {"branch": (200, True)},
-        True, "pass", "in place",
+        "pass", True, "in place",
     ),
     (
         "both policy mechanisms verified passes",
@@ -258,7 +258,7 @@ PREFLIGHT_CASES = [
          "deployment_branch_policy": {"protected_branches": True,
                                       "custom_branch_policies": True}},
         {"branch": (200, True), "policies": (200, True, ["main"])},
-        True, "pass", "in place",
+        "pass", True, "in place",
     ),
     (
         "null deployment policy refuses — null means every branch",
@@ -266,7 +266,7 @@ PREFLIGHT_CASES = [
         {"protection_rules": REVIEWERS,
          "deployment_branch_policy": None},
         {},
-        True, "refuse", "every branch deploy",
+        "refuse", True, "every branch deploy",
     ),
     (
         "policy with no mechanism refuses",
@@ -275,7 +275,7 @@ PREFLIGHT_CASES = [
          "deployment_branch_policy": {"protected_branches": False,
                                       "custom_branch_policies": False}},
         {},
-        True, "refuse", "every branch deploy",
+        "refuse", True, "every branch deploy",
     ),
     (
         "empty protection_rules refuses",
@@ -283,7 +283,7 @@ PREFLIGHT_CASES = [
         {"protection_rules": [],
          "deployment_branch_policy": CUSTOM_POLICY},
         {"policies": (200, True, ["main"])},
-        True, "refuse", "no required reviewers",
+        "refuse", True, "no required reviewers",
     ),
     (
         "protection_rules without a reviewer rule refuses",
@@ -291,14 +291,14 @@ PREFLIGHT_CASES = [
         {"protection_rules": [{"type": "wait_timer"}],
          "deployment_branch_policy": CUSTOM_POLICY},
         {"policies": (200, True, ["main"])},
-        True, "refuse", "no required reviewers",
+        "refuse", True, "no required reviewers",
     ),
     (
         "both facet keys absent warns — skipped, not refused",
         200,
         {},
         {},
-        True, "unverified", "partially verified",
+        "unverified", True, "partially verified",
     ),
     (
         "unprotected default branch refuses",
@@ -306,7 +306,7 @@ PREFLIGHT_CASES = [
         {"protection_rules": REVIEWERS,
          "deployment_branch_policy": BRANCH_POLICY},
         {"branch": (200, False)},
-        True, "refuse", "not a protected branch",
+        "refuse", True, "not a protected branch",
     ),
     (
         "no rule covering the default branch refuses",
@@ -314,7 +314,7 @@ PREFLIGHT_CASES = [
         {"protection_rules": REVIEWERS,
          "deployment_branch_policy": CUSTOM_POLICY},
         {"policies": (200, True, ["release-*"])},
-        True, "refuse", "deployment-branch rule",
+        "refuse", True, "deployment-branch rule",
     ),
     (
         "unreadable branch evidence warns",
@@ -322,7 +322,7 @@ PREFLIGHT_CASES = [
         {"protection_rules": REVIEWERS,
          "deployment_branch_policy": BRANCH_POLICY},
         {"branch": (403, None)},
-        True, "unverified", "partially verified",
+        "unverified", True, "partially verified",
     ),
     (
         "incomplete policy enumeration warns",
@@ -330,50 +330,50 @@ PREFLIGHT_CASES = [
         {"protection_rules": REVIEWERS,
          "deployment_branch_policy": CUSTOM_POLICY},
         {"policies": (200, False, ["main"])},
-        True, "unverified", "partially verified",
+        "unverified", True, "partially verified",
     ),
     (
-        "404 proven absent refuses on live",
+        "404 proven absent refuses",
         404, None,
         {"listing": (200, True, ["staging"])},
-        True, "refuse", "no `release` environment",
+        "refuse", False, "no `release` environment",
     ),
     (
-        "404 proven absent refuses on rehearsal too",
-        404, None,
-        {"listing": (200, True, ["staging"])},
-        False, "refuse", "no `release` environment",
-    ),
-    (
-        "404 listed-but-unreadable warns",
+        "404 listed-but-unreadable warns — existence proven",
         404, None,
         {"listing": (200, True, ["release", "staging"])},
-        True, "unverified", "unreadable",
+        "unverified", True, "unreadable",
     ),
     (
         "404 with incomplete listing warns — never absence",
         404, None,
         {"listing": (200, False, ["staging"])},
-        True, "unverified", "could not be proven",
+        "unverified", False, "could not be proven",
     ),
     (
         "404 with unreadable listing warns",
         404, None,
         {"listing": (403, False, [])},
-        True, "unverified", "could not be proven",
+        "unverified", False, "could not be proven",
     ),
-    ("401 is unverified on live",
-     401, None, {}, True, "unverified", "HTTP 401"),
-    ("403 is unverified on rehearsal",
-     403, None, {}, False, "unverified", "still applies"),
-    ("transport failure is unverified",
-     0, None, {}, True, "unverified", "transport"),
+    ("401 is unverified, existence unproven",
+     401, None, {}, "unverified", False, "HTTP 401"),
+    ("403 is unverified, existence unproven",
+     403, None, {}, "unverified", False, "HTTP 403"),
+    ("403 with a listing naming release — existence proven",
+     403, None, {"listing": (200, True, ["release"])},
+     "unverified", True, "HTTP 403"),
+    ("403 with a listing omitting release — proven absent",
+     403, None, {"listing": (200, True, ["staging"])},
+     "refuse", False, "no `release` environment"),
+    ("transport failure is unverified, existence unproven",
+     0, None, {}, "unverified", False, "transport"),
     ("an unexpected status is unverified",
-     500, None, {}, True, "unverified", "HTTP 500"),
+     500, None, {}, "unverified", False, "HTTP 500"),
     (
         "an unreadable 200 payload is unverified",
         200, None, {},
-        True, "unverified", "unreadable payload",
+        "unverified", True, "unreadable payload",
     ),
 ]
 
@@ -384,20 +384,20 @@ class PreflightVerdictTest(unittest.TestCase):
     on what the answer can prove (a missing environment auto-creates
     unprotected; a misconfigured one removes the approval gate) and it
     binds at every mode, 'unverified' on everything the evidence cannot
-    positively establish, 'pass' on a fully verified shape. On live,
-    unverified messages omit the job-entry reassurance because the job
-    never enters the environment."""
+    positively establish, 'pass' on a fully verified shape. The third
+    element reports whether existence itself is proven: the caller's
+    recorded opt-in may exempt an unverified answer only there — a
+    possibly absent environment is never waved through."""
 
     def test_every_contract_row(self):
-        for name, status, env, evidence, live, verdict, fragment in \
+        for name, status, env, evidence, verdict, exists, fragment in \
                 PREFLIGHT_CASES:
             with self.subTest(name):
-                got, message = train.preflight_verdict(
-                    status, env, evidence, "main", live)
+                got, message, proven = train.preflight_verdict(
+                    status, env, evidence, "main")
                 self.assertEqual(got, verdict, message)
+                self.assertEqual(proven, exists, message)
                 self.assertIn(fragment, message)
-                if got == "unverified" and live:
-                    self.assertNotIn("still applies at job entry", message)
 
 
 class PreflightFetchTest(unittest.TestCase):
@@ -408,8 +408,8 @@ class PreflightFetchTest(unittest.TestCase):
     def test_only_the_facets_the_payload_carries_are_fetched(self):
         cases = [
             (404, None, {"listing"}),
-            (403, None, set()),
-            (0, None, set()),
+            (403, None, {"listing"}),
+            (0, None, {"listing"}),
             (200, {}, set()),
             (200, {"deployment_branch_policy": None}, set()),
             (200, {"deployment_branch_policy": BRANCH_POLICY}, {"branch"}),
@@ -437,10 +437,14 @@ class PreflightCommandTest(unittest.TestCase):
     """The thin client turns a verdict into an exit code. A live bind
     fails closed on anything it cannot positively verify — a possibly
     absent environment would proceed unprotected — unless the operator
-    recorded the ALLOW_UNVERIFIED_RELEASE_ENV=1 opt-in; the opt-in never
-    exempts a proven refusal. Rehearsals always warn and continue."""
+    recorded the ALLOW_UNVERIFIED_RELEASE_ENV=1 opt-in, and only where
+    the environment's existence is itself proven; the opt-in never
+    exempts a proven refusal or an unproven environment. Rehearsals
+    always warn and continue, and the suffix previews what the identical
+    live run would do."""
 
-    def run_preflight(self, mode, opt_in, status, env, listing=None):
+    def run_preflight(self, mode, opt_in, status, env, listing=None,
+                      list_status=200, complete=True):
         environ = {
             "GH_TOKEN": "t",
             "GITHUB_REPOSITORY": "o/r",
@@ -453,7 +457,8 @@ class PreflightCommandTest(unittest.TestCase):
         previous_get, previous_page = train.gh_get, train.gh_paginated
         train.gh_get = lambda _path: (status, env, None)
         train.gh_paginated = lambda _path, _key: (
-            200, [{"name": name} for name in (listing or [])], True)
+            list_status,
+            [{"name": name} for name in (listing or [])], complete)
         self.addCleanup(setattr, train, "gh_get", previous_get)
         self.addCleanup(setattr, train, "gh_paginated", previous_page)
         out = io.StringIO()
@@ -464,24 +469,30 @@ class PreflightCommandTest(unittest.TestCase):
         return rc, out.getvalue()
 
     def test_live_fails_closed_on_unverified(self):
-        rc, out = self.run_preflight("live", None, 403, None)
+        # A permission wall: the listing is unreadable too, so existence
+        # stays unproven and the run stops.
+        rc, out = self.run_preflight("live", None, 403, None,
+                                   list_status=403, complete=False)
         self.assertEqual(rc, 1)
         self.assertIn("::error::", out)
-        self.assertIn("ALLOW_UNVERIFIED_RELEASE_ENV", out)
+        self.assertIn("RELEASE_ENV_READ_TOKEN", out)
 
     def test_rehearsal_warns_on_unverified(self):
-        rc, out = self.run_preflight("dry-run", None, 403, None)
+        rc, out = self.run_preflight("dry-run", None, 403, None,
+                                   list_status=403, complete=False)
         self.assertEqual(rc, 0)
         self.assertIn("::warning::", out)
-        self.assertIn("a live run stops here unless "
-                      "ALLOW_UNVERIFIED_RELEASE_ENV=1", out)
+        self.assertIn("a live run would stop here", out)
+        self.assertIn("RELEASE_ENV_READ_TOKEN", out)
 
     def test_mode_defaults_to_strict(self):
         # An unset or misspelled BIND_MODE keeps live semantics — the
         # warning path only exists for the producer's own "dry-run".
         for mode in (None, "rehearsal", "DRY-RUN"):
             with self.subTest(mode):
-                rc, _ = self.run_preflight(mode, None, 403, None)
+                rc, _ = self.run_preflight(mode, None, 403, None,
+                                           list_status=403,
+                                           complete=False)
                 self.assertEqual(rc, 1)
 
     def test_opt_in_exempts_only_verified_existence(self):
@@ -490,17 +501,35 @@ class PreflightCommandTest(unittest.TestCase):
         rc, out = self.run_preflight("live", "1", 200, {"other": {}}, None)
         self.assertEqual(rc, 0)
         self.assertIn("proceeding unverified by operator opt-in", out)
-        # Existence unproven (403 answers everything): the opt-in cannot
-        # wave it — a possibly absent environment would auto-create
-        # unprotected.
-        rc, out = self.run_preflight("live", "1", 403, None)
+        # Existence proven through the listing instead of the endpoint:
+        # the opt-in applies the same way.
+        rc, out = self.run_preflight("live", "1", 404, None,
+                                   ["release", "staging"])
+        self.assertEqual(rc, 0)
+        self.assertIn("proceeding unverified by operator opt-in", out)
+        # Existence unproven (403 answers everything, the listing
+        # included): the opt-in cannot wave it — a possibly absent
+        # environment would auto-create unprotected.
+        rc, out = self.run_preflight("live", "1", 403, None,
+                                   list_status=403, complete=False)
         self.assertEqual(rc, 1)
         self.assertIn("existence", out)
-        # Rehearsals warn regardless of the existence question.
-        rc, out = self.run_preflight("dry-run", "1", 403, None)
+        # An incomplete listing cannot prove existence either.
+        rc, out = self.run_preflight("live", "1", 404, None,
+                                   ["release"], complete=False)
+        self.assertEqual(rc, 1)
+        self.assertIn("existence", out)
+        # The opt-in parses exactly: a non-"1" value unlocks nothing even
+        # where existence is proven.
+        self.assertEqual(
+            self.run_preflight("live", "yes", 200, {"other": {}}, None)[0],
+            1)
+        # Rehearsals warn regardless of the existence question; the
+        # suffix previews the live stop honestly.
+        rc, out = self.run_preflight("dry-run", "1", 403, None,
+                                   list_status=403, complete=False)
         self.assertEqual(rc, 0)
-        self.assertIn("recorded opt-in", out)
-        self.assertNotIn("stops here unless", out)
+        self.assertIn("would still stop", out)
         # A proven refusal — a complete listing without `release` — is
         # never exempted by the opt-in.
         self.assertEqual(
