@@ -623,6 +623,56 @@ async fn cancel_during_stall_terminates_the_process() {
 }
 
 #[tokio::test]
+async fn cancellation_wakes_an_already_pending_process_stream() {
+    struct CancelWake(std::sync::atomic::AtomicBool);
+    impl std::task::Wake for CancelWake {
+        fn wake(self: Arc<Self>) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    let (proc, handle) = ScriptProcess::new(vec![], 0);
+    let (adapter, effects) = jsonl_adapter(proc.stalling());
+    let control = RequestControl::default();
+    let mut stream = adapter
+        .chat_stream(ChatRequest::default(), &control)
+        .await
+        .unwrap();
+    let notified = Arc::new(CancelWake(std::sync::atomic::AtomicBool::new(false)));
+    let waker = std::task::Waker::from(notified.clone());
+    let mut context = Context::from_waker(&waker);
+    assert!(stream.as_mut().poll_next(&mut context).is_pending());
+    control.cancel.cancel();
+    assert!(notified.0.load(std::sync::atomic::Ordering::SeqCst));
+    assert!(matches!(
+        stream.as_mut().poll_next(&mut context),
+        Poll::Ready(Some(Err(Error::Cancelled)))
+    ));
+    assert!(matches!(
+        stream.as_mut().poll_next(&mut context),
+        Poll::Ready(None)
+    ));
+    assert_eq!(effects.specs.lock().unwrap().len(), 1);
+    assert_eq!(*handle.terminates.lock().unwrap(), 1);
+    assert_eq!(*handle.waits.lock().unwrap(), 1);
+    drop(stream);
+    assert_eq!(*handle.waits.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn cancellation_before_open_never_spawns_the_process() {
+    let (proc, handle) = ScriptProcess::new(vec![], 0);
+    let (adapter, effects) = jsonl_adapter(proc);
+    let control = RequestControl::default();
+    control.cancel.cancel();
+    assert!(matches!(
+        adapter.chat_stream(ChatRequest::default(), &control).await,
+        Err(Error::Cancelled)
+    ));
+    assert!(effects.specs.lock().unwrap().is_empty());
+    assert!(handle.stdin.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn dropping_the_stream_terminates_the_process() {
     let (proc, h) = ScriptProcess::new(
         vec![

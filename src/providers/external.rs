@@ -28,7 +28,7 @@ use std::task::{Context, Poll};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use futures_core::Stream;
 use serde_json::{Value, json};
-use tokio_util::sync::CancellationToken;
+use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
 
 use crate::api::*;
 use crate::auth::{AuthKind, Credential, CredentialResolver, CredentialScope};
@@ -1068,7 +1068,7 @@ struct ProcessSession {
     process: Box<dyn Process>,
     protocol: Arc<dyn ClientProtocol>,
     framing: ClientFraming,
-    cancel: CancellationToken,
+    cancel: Pin<Box<WaitForCancellationFutureOwned>>,
     framer: LineFramer,
     /// Accumulated output under `ClientFraming::Whole`.
     whole: Vec<u8>,
@@ -1099,7 +1099,7 @@ impl ProcessSession {
             framing: protocol.framing(),
             process,
             protocol,
-            cancel,
+            cancel: Box::pin(cancel.cancelled_owned()),
             framer: LineFramer::new(),
             whole: Vec::new(),
             pending: VecDeque::new(),
@@ -1404,7 +1404,9 @@ impl Stream for ProcessSession {
                 self.done = true;
                 return Poll::Ready(None);
             }
-            if self.cancel.is_cancelled() {
+            // Register the cancel token's waker so cancellation
+            // wakes the drain while the process output pends.
+            if self.cancel.as_mut().poll(cx).is_ready() {
                 self.cancelled();
                 continue;
             }
@@ -1428,15 +1430,7 @@ impl Stream for ProcessSession {
                 Poll::Ready(None) => {
                     self.on_eof();
                 }
-                Poll::Pending => {
-                    // Register the cancel token's waker so cancellation
-                    // wakes the drain while the process output pends.
-                    let mut cancelled = std::pin::pin!(self.cancel.cancelled());
-                    if cancelled.as_mut().poll(cx).is_ready() {
-                        continue;
-                    }
-                    return Poll::Pending;
-                }
+                Poll::Pending => return Poll::Pending,
             }
         }
     }
