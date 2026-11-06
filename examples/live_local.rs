@@ -1,7 +1,8 @@
 //! Live verification against the local Ollama surface (gemma4:e4b).
 //!
-//! Bring the model up with `local-llm up`, then:
+//! Pull the model into a running `ollama serve`, then:
 //!
+//!   A4MP_LIVE_ENDPOINT=<base URL of the ollama server> \
 //!   cargo run --release --example live_local
 //!
 //! Covers the two surfaces a stock `ollama serve` exposes: the Ollama
