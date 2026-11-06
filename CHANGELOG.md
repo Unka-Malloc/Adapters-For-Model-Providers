@@ -3,10 +3,35 @@
 All notable changes to `a4mp` are recorded here. Versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-11-07
 
 ### Changed
 
+- **Breaking:** `Catalog::new` now returns `Result<Catalog, Error>`.
+  Registration is fail-closed: a duplicated canonical id, an alias
+  claimed by two profiles, or an alias spelling another profile's
+  canonical id is an `Error::Protocol` collision instead of a silent
+  overwrite.
+- **Breaking:** `OAuthClient` has a new public field, `endpoint_headers`,
+  carrying provider-required headers on device and token endpoint posts.
+  Struct literals must set it (`http::HeaderMap::new()` when none are
+  needed); `broker::copilot_oauth_client` uses it for GitHub's
+  `Accept: application/json` negotiation instead of a private form-post
+  variant.
+- **Breaking:** `SseDecoder::feed` now returns
+  `Result<Vec<SseEvent>, Error>` and refuses a buffered frame larger than
+  8 MiB with `Error::Protocol`; `SseStream` surfaces that error and ends.
+  Separator scanning resumes where the previous feed stopped instead of
+  rescanning the buffer.
+- **Breaking:** `WireBridge::chat_stream` now returns `BridgeEventStream`,
+  a stream of `Result<SseEvent, Error>` whose `report()` and
+  `drain_losses()` expose request-decode and frame-time encode losses.
+- `JobHandle::check_binding` and `JobHandle::check_path_id` let adapters
+  refuse a handle minted for another provider or protocol, or an `id`
+  that is not a safe path segment, before it reaches a request path.
+- `Transport::open_channel`'s default now reports the new
+  `TransportError::Unsupported`, which is `RetrySafety::Safe` because
+  nothing was dispatched.
 - **Behavior change:** the builtin local-server profiles — `omlx`,
   `mlx-serve`, `atomic-chat`, `ollama` (native and OpenAI-compatible
   targets) and `lmstudio` — plus privatemode's `local-proxy` region no
@@ -18,6 +43,10 @@ All notable changes to `a4mp` are recorded here. Versions follow
 
 ### Fixed
 
+- A process-backed external adapter stream now registers its
+  cancellation waker on every poll, so cancelling a request whose
+  process output is already pending wakes the stream, terminates the
+  process and ends with `Error::Cancelled`.
 - One endpoint policy now covers every materialization path — literal
   base URLs, `{name}` atoms and leading `{endpoint}` URLs alike:
   `https` binds anywhere, `http` binds only toward private or loopback
