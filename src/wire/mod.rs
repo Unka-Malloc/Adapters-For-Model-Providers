@@ -325,16 +325,11 @@ pub(crate) fn extra_keys<'a>(obj: &'a Map<String, Value>, claimed: &[&str]) -> V
 pub(crate) fn string_list(v: &Value) -> Option<Vec<String>> {
     match v {
         Value::String(s) => Some(vec![s.clone()]),
-        Value::Array(items) => {
-            let mut out = Vec::new();
-            for item in items {
-                match item.as_str() {
-                    Some(s) => out.push(s.to_owned()),
-                    None => return None,
-                }
-            }
-            Some(out)
-        }
+        // Any non-string element makes the whole collection `None`.
+        Value::Array(items) => items
+            .iter()
+            .map(|item| item.as_str().map(str::to_owned))
+            .collect(),
         _ => None,
     }
 }

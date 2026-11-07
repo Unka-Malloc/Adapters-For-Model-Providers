@@ -87,6 +87,21 @@ fn decodes_messages_tools_sampling_and_extensions() {
 }
 
 #[test]
+fn a_stop_array_with_a_non_string_element_is_preserved_verbatim() {
+    // One non-string element disqualifies the whole list as canonical
+    // stop sequences; the field rides the extensions untouched instead of
+    // decoding to a partial list.
+    let body = json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stop": ["END", 7]
+    });
+    let (req, _report) = decode(&body);
+    assert!(req.sampling.stop.is_empty(), "{:?}", req.sampling.stop);
+    assert_eq!(req.extensions["stop"], json!(["END", 7]));
+}
+
+#[test]
 fn decodes_media_parts_and_reasoning() {
     let body = json!({
         "model": "m",
