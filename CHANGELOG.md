@@ -83,6 +83,9 @@ All notable changes to `a4mp` are recorded here. Versions follow
   device-authorization response, credential-bearing headers, request and
   response bodies, process argument values and environment values are
   redacted; non-secret metadata stays visible for diagnostics.
+  `ProcessSpec`'s `Debug` also shows only the program's file name and
+  redacts the working directory, so a host that logs a spec does not reveal
+  the local account or workspace layout through absolute paths.
 - The `Credential::Cloud` redaction test uses a non-PEM private-key marker as
   its synthetic secret, so the deterministic privacy scan no longer mistakes
   the test fixture for a real private key.

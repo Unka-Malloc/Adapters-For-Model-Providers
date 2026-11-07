@@ -309,5 +309,43 @@ fn process_spec_debug_redacts_arguments_and_environment_values() {
     // Non-secret metadata remains inspectable.
     assert!(debug.contains("cursor-agent"), "{debug}");
     assert!(debug.contains("CURSOR_API_KEY"), "{debug}");
-    assert!(debug.contains("workdir"), "{debug}");
+    assert!(!debug.contains("workdir"), "{debug}");
+}
+
+#[test]
+fn process_spec_debug_hides_local_paths() {
+    let workspace = std::env::temp_dir().join(common::run_token("workspace"));
+    let program = workspace.join("bin").join("cursor-agent");
+    let spec = ProcessSpec {
+        requirement: "cursor-agent >= 1.2".into(),
+        program: program.to_string_lossy().into_owned(),
+        args: vec![],
+        env: vec![],
+        cwd: Some(workspace.to_string_lossy().into_owned()),
+    };
+    let debug = format!("{spec:?}");
+    // Neither the directories locating the program nor the working
+    // directory reach the projection; the program's file name does.
+    assert!(!debug.contains(common::run_token("workspace")), "{debug}");
+    assert!(
+        !debug.contains(&*std::env::temp_dir().to_string_lossy()),
+        "{debug}"
+    );
+    assert!(debug.contains(r#"program: "cursor-agent""#), "{debug}");
+    assert!(debug.contains(r#"cwd: Some("<redacted>")"#), "{debug}");
+    assert!(
+        debug.contains(r#"requirement: "cursor-agent >= 1.2""#),
+        "{debug}"
+    );
+
+    // Backslash-separated paths reduce to the file name as well.
+    let spec = ProcessSpec {
+        program: ["X:", "tools", "agent.exe"].join("\\"),
+        cwd: None,
+        ..spec
+    };
+    let debug = format!("{spec:?}");
+    assert!(debug.contains(r#"program: "agent.exe""#), "{debug}");
+    assert!(!debug.contains("tools"), "{debug}");
+    assert!(debug.contains("cwd: None"), "{debug}");
 }

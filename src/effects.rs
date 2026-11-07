@@ -19,10 +19,11 @@ pub struct ResourceRef {
 
 /// How a required external client process should run.
 ///
-/// `Debug` keeps the declared requirement, program, working directory and
-/// environment variable names, but redacts argument values and environment
-/// values: external-client command lines commonly carry API keys and
-/// session tokens.
+/// `Debug` keeps the declared requirement, the program's file name and
+/// environment variable names, but redacts argument values, environment
+/// values and the working directory: external-client command lines
+/// commonly carry API keys and session tokens, and absolute program and
+/// working-directory paths reveal the local account and workspace layout.
 #[derive(Clone)]
 pub struct ProcessSpec {
     /// Declared runtime requirement (e.g. "cursor-agent >= 1.2",
@@ -40,15 +41,24 @@ impl fmt::Debug for ProcessSpec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProcessSpec")
             .field("requirement", &self.requirement)
-            .field("program", &self.program)
+            .field("program", &file_name(&self.program))
             .field("args", &format!("<redacted {} arg(s)>", self.args.len()))
             .field(
                 "env_keys",
                 &self.env.iter().map(|(key, _)| key).collect::<Vec<_>>(),
             )
-            .field("cwd", &self.cwd)
+            .field("cwd", &self.cwd.as_ref().map(|_| "<redacted>"))
             .finish()
     }
+}
+
+/// The last component of a `/`- or `\`-separated path: a program's file
+/// name without the directories that locate it on this machine.
+fn file_name(path: &str) -> &str {
+    path.trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(path)
 }
 
 /// A running external process with a bounded, pull-based output stream.
